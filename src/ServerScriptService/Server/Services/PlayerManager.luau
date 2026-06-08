@@ -41,19 +41,115 @@ function PlayerManager:CreateState(player: Player): PlayerState
 	local dataManager = self.Services:Get("DataManager")
 	local profile = dataManager:GetProfile(player) or dataManager:LoadProfile(player)
 
+	-- LoadProfile can now legitimately return nil (DataStore failure or
+	-- lost session lock race). In that case we keep the player on the
+	-- character-select / loading screen, give the load a few retries
+	-- with backoff, and only kick them if it really can't be salvaged.
+	if not profile then
+		self:_RetryLoadOrKick(player)
+		-- Return a placeholder so callers that immediately read
+		-- GetState(player) get something non-nil. The real state will
+		-- overwrite this once the load succeeds.
+		local placeholder: PlayerState = {
+			Alive = false,
+			Spectating = false,
+			InRound = false,
+			Poop = 0,
+			EquippedItems = {},
+			OwnedItems = {},
+		}
+		local selfAny = self :: any
+		selfAny._states[player] = placeholder
+		return placeholder
+	end
+
 	local state: PlayerState = {
 		Alive = false,
 		Spectating = false,
 		InRound = false,
-		Coins = profile.Coins,
+		Poop = profile.Poop,
 		EquippedItems = profile.EquippedItems,
 		OwnedItems = profile.OwnedItems,
 	}
 
 	local selfAny = self :: any
 	selfAny._states[player] = state
+
+	self:EnsureLeaderstats(player, state)
 	EventManager:Fire(EventNames.PlayerStateChanged, player, state)
 	return state
+end
+
+-- Backs the LoadProfile retry path. We give the load a small number of
+-- attempts (so transient DataStore hiccups don't kick paying players)
+-- and only kick as a last resort. The kick message tells the player
+-- they can rejoin -- a single failed load is not a ban.
+function PlayerManager:_RetryLoadOrKick(player: Player)
+	local dataManager = self.Services:Get("DataManager")
+	local MAX_RETRIES = 3
+	local RETRY_DELAY_SECONDS = 3
+
+	task.spawn(function()
+		for _ = 1, MAX_RETRIES do
+			if not player or not player.Parent then
+				return
+			end
+
+			task.wait(RETRY_DELAY_SECONDS)
+			local profile = dataManager:LoadProfile(player)
+			if profile then
+				-- Success: replace the placeholder state with the real one
+				-- and refresh the leaderstats so the player sees their
+				-- real balance.
+				local state: PlayerState = {
+					Alive = false,
+					Spectating = false,
+					InRound = false,
+					Poop = profile.Poop,
+					EquippedItems = profile.EquippedItems,
+					OwnedItems = profile.OwnedItems,
+				}
+				local selfAny = self :: any
+				selfAny._states[player] = state
+				self:EnsureLeaderstats(player, state)
+				EventManager:Fire(EventNames.PlayerStateChanged, player, state)
+				return
+			end
+		end
+
+		-- All retries exhausted. Kick with a friendly message; the player
+		-- can rejoin and try again.
+		if player and player.Parent then
+			player:Kick("Your player data could not be loaded. Please rejoin.")
+		end
+	end)
+end
+
+-- Creates the standard Roblox `leaderstats` folder on the player (so the
+-- in-game leaderboard shows up) and attaches a `Poop` IntValue that is kept
+-- in sync with the authoritative PlayerState. Re-creating it on a subsequent
+-- state creation (e.g. after a profile reload) is safe: the existing folder
+-- is reused and only the value is refreshed.
+function PlayerManager:EnsureLeaderstats(player: Player, state: PlayerState)
+	if not player or not player.Parent then
+		return
+	end
+
+	local leaderstats = player:FindFirstChild("leaderstats")
+	if not leaderstats then
+		leaderstats = Instance.new("Folder")
+		leaderstats.Name = "leaderstats"
+		leaderstats.Parent = player
+	end
+
+	local poopValue = leaderstats:FindFirstChild("Poop")
+	if not poopValue then
+		poopValue = Instance.new("IntValue")
+		poopValue.Name = "Poop"
+		poopValue.Parent = leaderstats
+	end
+
+	poopValue.Value = math.max(0, math.floor(state.Poop or 0))
 end
 
 function PlayerManager:GetState(player: Player): PlayerState?
