@@ -3,8 +3,8 @@
 local GameConfig = {
 	Round = {
 		MinimumPlayers = 2,
-		IntermissionDurationSeconds = 20,
-		StartingDurationSeconds = 5,
+		IntermissionDurationSeconds = 5,
+		StartingDurationSeconds = 2,
 		RoundEndDurationSeconds = 8,
 		DefaultMode = "LastManStanding",
 	},

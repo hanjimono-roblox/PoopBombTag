@@ -90,34 +90,48 @@ end
 function BombController:Start()
 	BaseController.Start(self)
 
-	-- BombAssigned: (holder: Player, durationSeconds: number)
-	-- The server is telling us a new player now holds the bomb and how
-	-- long the fuse is.  We attach visuals + start the tick + show UI.
-	self._maid:GiveTask(EventManager:Connect(EventNames.BombAssigned, function(holder: Player, durationSeconds: number)
-		self:OnBombAssigned(holder, durationSeconds)
-	end))
+	print("BombController started")
 
-	-- BombTransferred: (fromPlayer: Player, toPlayer: Player)
-	-- The server has handed the bomb off.  We play the transfer feedback
-	-- and re-attach the bomb to the new holder.
-	self._maid:GiveTask(EventManager:Connect(EventNames.BombTransferred, function(fromPlayer: Player, toPlayer: Player)
-		self:OnBombTransferred(fromPlayer, toPlayer)
-	end))
+	local remotes = ReplicatedStorage:WaitForChild("Remotes")
+	local bombEvent = remotes:WaitForChild("BombEvent")
 
-	-- BombExploded: (holder: Player)
-	-- The bomb went off on the given player.  We play the explosion
-	-- feedback and clear the visuals / UI.
-	self._maid:GiveTask(EventManager:Connect(EventNames.BombExploded, function(holder: Player)
-		self:OnBombExploded(holder)
-	end))
+	self._maid:GiveTask(
+		bombEvent.OnClientEvent:Connect(function(action: string, ...)
+			print("BombEvent received:", action)
 
-	-- RoundEnded: (reason: string, winners: { Player })
-	-- The round is over, so whatever we are showing must be torn down.
-	-- BombManager:ExplodeBomb already fires BombExploded but the round
-	-- can also end without an explosion (e.g. last man standing wins).
-	self._maid:GiveTask(EventManager:Connect(EventNames.RoundEnded, function(_reason: string, _winners: { Player })
-		self:ClearBombVisuals()
-	end))
+			if action == "Assigned" then
+				local holder, durationSeconds = ...
+
+				if holder then
+					print("BombAssigned received", holder.Name, durationSeconds)
+				end
+
+				self:OnBombAssigned(holder, durationSeconds)
+
+			elseif action == "Transferred" then
+				local fromPlayer, toPlayer = ...
+
+				if fromPlayer and toPlayer then
+					print("BombTransferred received", fromPlayer.Name, toPlayer.Name)
+				end
+
+				self:OnBombTransferred(fromPlayer, toPlayer)
+
+			elseif action == "Exploded" then
+				local holder = ...
+
+				if holder then
+					print("BombExploded received", holder.Name)
+				end
+
+				self:OnBombExploded(holder)
+
+			elseif action == "RoundEnded" then
+				print("RoundEnded received")
+				self:ClearBombVisuals()
+			end
+		end)
+	)
 end
 
 -- ---------------------------------------------------------------------------
@@ -303,7 +317,7 @@ function BombController:_ResolveUI()
 		return
 	end
 
-	local playerGui = Players.LocalPlayer:FindFirstChildOfClass("PlayerGui")
+	local playerGui = Players.LocalPlayer:WaitForChild("PlayerGui")
 	if not playerGui then
 		return
 	end
@@ -315,7 +329,7 @@ function BombController:_ResolveUI()
 		return
 	end
 
-	local label = gui:FindFirstChild("TimerLabel")
+	local label = gui:FindFirstChild("TimerLabel", true)
 	if not label or not label:IsA("TextLabel") then
 		return
 	end

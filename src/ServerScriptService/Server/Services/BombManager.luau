@@ -12,6 +12,8 @@ local BombManager = {}
 BombManager.__index = BombManager
 setmetatable(BombManager, { __index = BaseService })
 
+local BombEvent = ReplicatedStorage.Remotes.BombEvent
+
 function BombManager.new()
 	local self: any = BaseService.new("BombManager")
 	self._holder = nil :: Player?
@@ -29,29 +31,43 @@ function BombManager:AssignBomb(player: Player)
 	local selfAny = self :: any
 	selfAny._holder = player
 	self:ResetTimer()
-	EventManager:Fire(EventNames.BombAssigned, player, GameConfig.Bomb.DurationSeconds)
+	print("SERVER FIRING BOMB ASSIGNED")
+	BombEvent:FireAllClients(
+		"Assigned",
+		player,
+		GameConfig.Bomb.DurationSeconds
+	)
 	return true
 end
 
 function BombManager:TransferBomb(fromPlayer: Player, toPlayer: Player): boolean
+	print("[Bomb] TransferBomb called", fromPlayer.Name, "->", toPlayer.Name)
 	local selfAny = self :: any
 	if selfAny._holder ~= fromPlayer then
+		print("[Bomb] Transfer failed: holder mismatch")
 		return false
 	end
 
 	if not self:IsValidBombHolder(toPlayer) then
+		print("[Bomb] Transfer failed: target not valid holder")
 		return false
 	end
 
 	local now = TimeUtil.Now()
 	if now - selfAny._lastTransferAt < GameConfig.Bomb.TransferCooldownSeconds then
+		print("[Bomb] Transfer failed: cooldown")
 		return false
 	end
 
 	selfAny._lastTransferAt = now
 	selfAny._holder = toPlayer
 	self:ResetTimer()
-	EventManager:Fire(EventNames.BombTransferred, fromPlayer, toPlayer)
+	BombEvent:FireAllClients(
+		"Transferred",
+		fromPlayer,
+		toPlayer
+	)
+	print("[Bomb] Transfer successful")
 	return true
 end
 
@@ -82,7 +98,10 @@ function BombManager:ExplodeBomb(): boolean
 
 	selfAny._holder = nil
 	selfAny._timerThread = nil
-	EventManager:Fire(EventNames.BombExploded, holder)
+	BombEvent:FireAllClients(
+		"Exploded",
+		holder
+	)
 	EventManager:Fire(EventNames.PlayerEliminated, holder, "BombExploded")
 	return true
 end
@@ -131,9 +150,12 @@ function BombManager:ValidateTag(fromPlayer: Player, toPlayer: Player): boolean
 end
 
 function BombManager:TryTag(fromPlayer: Player, toPlayer: Player): boolean
+	print("[Bomb] TryTag called", fromPlayer.Name, "->", toPlayer.Name)
 	if not self:ValidateTag(fromPlayer, toPlayer) then
+		print("[Bomb] TryTag rejected: ValidateTag failed")
 		return false
 	end
+	print("[Bomb] TryTag ValidateTag passed")
 
 	return self:TransferBomb(fromPlayer, toPlayer)
 end
