@@ -5,7 +5,16 @@ return {
 	Aliases = { "start" },
 	Permission = "RoundControl",
 	Description = "Starts a round.",
-	Execute = function(context)
-		return context.Services:Get("RoundManager"):StartRound(context.Args[1])
+
+	Arguments = {
+		{
+			Name = "mapId",
+			Type = "string",
+			Required = false,
+		},
+	},
+
+	Execute = function(ctx)
+		return ctx.Services:Get("RoundManager"):StartRound(ctx.mapId)
 	end,
 }

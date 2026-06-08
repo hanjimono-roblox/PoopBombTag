@@ -5,9 +5,18 @@ return {
 	Aliases = {},
 	Permission = "Ban",
 	Description = "Stubs an unban action for future persistent moderation.",
-	Execute = function(context)
+
+	Arguments = {
+		{
+			Name = "target",
+			Type = "player",
+			Required = true,
+		},
+	},
+
+	Execute = function(ctx)
 		-- TODO: Remove persisted ban records.
-		context.Services:Get("LoggingService"):Info("ADMIN", `Unban requested for {context.Args[1] or "unknown"}`)
+		ctx.Services:Get("LoggingService"):Info("ADMIN", `Unban requested for {ctx.Target.Name}`)
 		return true
 	end,
 }

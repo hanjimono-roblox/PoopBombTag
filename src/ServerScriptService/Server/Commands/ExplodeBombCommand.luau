@@ -5,7 +5,8 @@ return {
 	Aliases = { "explode" },
 	Permission = "BombControl",
 	Description = "Forces the current bomb to explode.",
-	Execute = function(context)
-		return context.Services:Get("BombManager"):ExplodeBomb()
+
+	Execute = function(ctx)
+		return ctx.Services:Get("BombManager"):ExplodeBomb()
 	end,
 }

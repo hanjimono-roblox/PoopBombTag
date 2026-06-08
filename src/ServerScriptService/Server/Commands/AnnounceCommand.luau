@@ -5,14 +5,22 @@ return {
 	Aliases = { "say" },
 	Permission = "Announcement",
 	Description = "Logs an announcement placeholder for future UI broadcast.",
-	Execute = function(context)
-		local message = table.concat(context.Args, " ")
-		if message == "" then
+
+	Arguments = {
+		{
+			Name = "message",
+			Type = "string",
+			Required = true,
+		},
+	},
+
+	Execute = function(ctx)
+		if ctx.Message == nil or ctx.Message == "" then
 			return false
 		end
 
 		-- TODO: Broadcast through a server-owned RemoteEvent to a UI controller.
-		context.Services:Get("LoggingService"):Info("ANNOUNCE", message)
+		ctx.Services:Get("LoggingService"):Info("ANNOUNCE", ctx.Message)
 		return true
 	end,
 }

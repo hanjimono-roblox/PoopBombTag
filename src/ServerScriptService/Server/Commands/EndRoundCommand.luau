@@ -5,7 +5,8 @@ return {
 	Aliases = { "end" },
 	Permission = "RoundControl",
 	Description = "Ends the active round.",
-	Execute = function(context)
-		return context.Services:Get("RoundManager"):EndRound("AdminEnded")
+
+	Execute = function(ctx)
+		return ctx.Services:Get("RoundManager"):EndRound("AdminEnded")
 	end,
 }
