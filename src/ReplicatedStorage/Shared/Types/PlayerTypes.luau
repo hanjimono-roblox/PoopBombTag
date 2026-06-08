@@ -8,7 +8,7 @@ export type PlayerState = {
 	Alive: boolean,
 	Spectating: boolean,
 	InRound: boolean,
-	Coins: number,
+	Poop: number,
 	EquippedItems: EquippedItems,
 	OwnedItems: { [string]: boolean },
 }

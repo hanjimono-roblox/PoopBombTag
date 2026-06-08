@@ -10,7 +10,7 @@ return table.freeze({
 	PlayerReturnedToLobby = "PlayerReturnedToLobby",
 	PlayerWon = "PlayerWon",
 	PlayersWon = "PlayersWon",
-	CoinsAwarded = "CoinsAwarded",
+	PoopAwarded = "PoopAwarded",
 	MapLoaded = "MapLoaded",
 	MapUnloaded = "MapUnloaded",
 	AdminCommandExecuted = "AdminCommandExecuted",

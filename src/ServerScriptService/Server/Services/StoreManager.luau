@@ -11,7 +11,7 @@ function StoreManager.new()
 	self._catalog = {
 		TestCosmetic = {
 			ItemId = "TestCosmetic",
-			PriceCoins = 25,
+			PricePoop = 25,
 		},
 	}
 	return setmetatable(self, StoreManager)
@@ -22,7 +22,7 @@ function StoreManager:GetCatalog()
 	return selfAny._catalog
 end
 
-function StoreManager:PurchaseWithCoins(player: Player, itemId: string): boolean
+function StoreManager:PurchaseWithPoop(player: Player, itemId: string): boolean
 	local selfAny = self :: any
 	local item = selfAny._catalog[itemId]
 	if not item then
@@ -30,7 +30,7 @@ function StoreManager:PurchaseWithCoins(player: Player, itemId: string): boolean
 	end
 
 	local currencyManager = self.Services:Get("CurrencyManager")
-	if not currencyManager:RemoveCoins(player, item.PriceCoins) then
+	if not currencyManager:RemovePoop(player, item.PricePoop) then
 		return false
 	end
 

@@ -16,9 +16,9 @@ local GameConfig = {
 	},
 
 	Rewards = {
-		LastManStandingWinnerCoins = 100,
-		FirstEliminationWinnerCoins = 50,
-		ParticipationCoins = 5,
+		LastManStandingWinnerPoop = 100,
+		FirstEliminationWinnerPoop = 50,
+		ParticipationPoop = 5,
 	},
 
 	Maps = {

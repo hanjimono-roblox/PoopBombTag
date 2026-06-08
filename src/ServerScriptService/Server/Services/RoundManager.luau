@@ -155,11 +155,11 @@ end
 function RoundManager:AwardWinners(winners: { Player })
 	local selfAny = self :: any
 	local reward = if selfAny._mode == RoundModes.FirstElimination
-		then GameConfig.Rewards.FirstEliminationWinnerCoins
-		else GameConfig.Rewards.LastManStandingWinnerCoins
+		then GameConfig.Rewards.FirstEliminationWinnerPoop
+		else GameConfig.Rewards.LastManStandingWinnerPoop
 
 	for _, winner in ipairs(winners) do
-		self.Services:Get("CurrencyManager"):AddCoins(winner, reward)
+		self.Services:Get("CurrencyManager"):AddPoop(winner, reward)
 	end
 end
 

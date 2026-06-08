@@ -10,13 +10,13 @@ local AdminConfig = {
 	},
 
 	UserRanks = {
-		-- [123456789] = "Owner",
+		[10975513326] = "Owner",
 	},
 
 	Permissions = {
 		Kick = 50,
 		Ban = 50,
-		Coins = 90,
+		Poop = 90,
 		Inventory = 90,
 		RoundControl = 90,
 		BombControl = 90,
