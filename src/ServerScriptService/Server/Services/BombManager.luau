@@ -82,19 +82,46 @@ function BombManager:AssignBomb(player: Player): boolean
 		player,
 		GameConfig.Bomb.DurationSeconds
 	)
+
+	-- Seed the resolver's rising-edge state for the new
+	-- holder. This is a direct in-process call between two
+	-- services via the service registry -- NOT an event
+	-- subscription. InteractionService does not listen to
+	-- events; it is called synchronously here at the moment
+	-- of the authority transition. The seed is "the new
+	-- holder's full current contacts" so that on the very
+	-- next tick, every pre-existing contact of the new
+	-- holder is treated as a non-rising-edge and is not
+	-- eligible as a transfer target. Only players who walk
+	-- INTO the new holder's range AFTER this seed are
+	-- eligible. This is what prevents the cluster-drain
+	-- chain P1 -> P2 -> P3 at round start.
+	self.Services:Get("InteractionService"):SeedPreviousContacts(player)
+
 	return true
 end
 
 -- ExecuteTransfer is the tag path. The contract is:
 --   "If I am called, it is already valid."
 -- InteractionService has already done:
---   * per-pair cooldown + global lock checks
+--   * rising-edge eligibility check against the new
+--     holder's previousContacts (the new holder can only
+--     receive the bomb from a player who is a rising edge
+--     of the new holder's contact set -- i.e. a player who
+--     has just entered the new holder's range, not a
+--     pre-existing contact)
 --   * holder identity check
 --   * validity check on the target
 --   * live distance check
 -- The only refusal paths that remain here are defensive guards
 -- against a true race (e.g. the holder was reset to nil between
 -- the arbitration decision and this call) -- not gameplay logic.
+--
+-- Note: there are no cooldowns, no global locks, no pair
+-- locks, no timers, and no artificial delays in the
+-- arbitration path. The rising-edge state is a pure
+-- function of the contact snapshot and the holder's
+-- previousContacts; it is not driven by wall-clock time.
 function BombManager:ExecuteTransfer(fromPlayer: Player, toPlayer: Player): boolean
 	local selfAny = self :: any
 
@@ -196,6 +223,16 @@ function BombManager:ExplodeBomb(): boolean
 	selfAny._holder = nil
 	selfAny._timerThread = nil
 
+	-- Clear the resolver's rising-edge state for the holder
+	-- that just ceased to be the bomb holder. There is no
+	-- successor holder in this path (the round either ends
+	-- or RoundManager assigns a new holder via AssignBomb,
+	-- which will re-seed). Keeping the entry would be
+	-- harmless (the resolver only reads entries for the
+	-- current holder) but the cleanup keeps the state map
+	-- from accumulating dead entries across rounds.
+	self.Services:Get("InteractionService"):ClearPreviousContacts(holder)
+
 	-- INTERNAL event only. Note that PlayerEliminated is also
 	-- fired on this authority transition because the bomb
 	-- exploding is what eliminates the holder in a normal round.
@@ -211,9 +248,22 @@ function BombManager:ClearBomb()
 		task.cancel(existingThread)
 	end
 
+	-- Capture the previous holder BEFORE clearing the
+	-- authority state, so the resolver cleanup call below
+	-- knows whose rising-edge state to drop.
+	local previousHolder = selfAny._holder
+
 	selfAny._holder = nil
 	selfAny._timerEndTime = 0
 	selfAny._timerThread = nil
+
+	-- Clear the resolver's rising-edge state for the holder
+	-- that just ceased to be the bomb holder. There is no
+	-- successor holder in this path (the round has ended);
+	-- any subsequent round will re-seed via AssignBomb.
+	if previousHolder then
+		self.Services:Get("InteractionService"):ClearPreviousContacts(previousHolder)
+	end
 end
 
 function BombManager:GetBombHolder(): Player?
