@@ -272,7 +272,7 @@ function BombController:EnsureBombVisuals()
 		tickSound.Name = TICK_SOUND_NAME
 		tickSound.Looped = true
 		tickSound.Volume = 0.6
-		tickSound.PlaybackRate = TICK_NORMAL_RATE
+		tickSound.PlaybackSpeed = TICK_NORMAL_RATE
 		tickSound.Parent = bomb
 	end
 
@@ -384,7 +384,9 @@ function BombController:_ResolveUI()
 end
 
 function BombController:_SetTimerLabelVisible(visible: boolean)
+	print("Timer visible:", visible)
 	self:_ResolveUI()
+	print("Label:", self._timerText)
 	local label = self._timerText
 	if not label then
 		return
@@ -406,8 +408,8 @@ function BombController:_UpdateTimerLabel(remainingSeconds: number)
 	-- Whole-number display matches the "X seconds left" feel of a bomb
 	-- timer.  Clamp negatives so the label does not flash -0 or -1
 	-- between the local timer hitting 0 and the server firing the event.
-	local seconds = math.max(0, math.ceil(remainingSeconds))
-	label.Text = tostring(seconds)
+	-- local seconds = math.max(0, math.ceil(remainingSeconds))
+	label.Text = string.format("%.2f", math.max(0, remainingSeconds))
 
 	-- Visually escalate as time runs out: turn the text red in the
 	-- final stretch so players can tell at a glance the fuse is short.
@@ -439,11 +441,11 @@ function BombController:_UpdateTickRate(remainingSeconds: number)
 		then TICK_FAST_RATE
 		else TICK_NORMAL_RATE
 
-	if math.abs(tick.PlaybackRate - targetRate) > 0.01 then
+	if math.abs(tick.PlaybackSpeed  - targetRate) > 0.01 then
 		-- Tween so the change is smooth rather than a hard step.  Short
 		-- duration is fine -- we are only smoothing jitter, not chasing
 		-- a moving target.
-		TweenService:Create(tick, TweenInfo.new(0.2), { PlaybackRate = targetRate }):Play()
+		TweenService:Create(tick, TweenInfo.new(0.2), { PlaybackSpeed  = targetRate }):Play()
 	end
 end
 
