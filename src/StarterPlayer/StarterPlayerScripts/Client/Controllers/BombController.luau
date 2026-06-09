@@ -23,8 +23,6 @@ local SoundService = game:GetService("SoundService")
 local TweenService = game:GetService("TweenService")
 
 local BaseController = require(script.Parent.Parent.Framework.BaseController)
-local EventManager = require(ReplicatedStorage.Shared.EventManager)
-local EventNames = require(ReplicatedStorage.Shared.Constants.EventNames)
 local Maid = require(ReplicatedStorage.Shared.Utility.Maid)
 local TimeUtil = require(ReplicatedStorage.Shared.Utility.TimeUtil)
 
@@ -92,42 +90,29 @@ function BombController:Start()
 
 	print("BombController started")
 
+	-- The client NEVER listens to EventManager for bomb state --
+	-- it only listens to the dedicated BombReplication RemoteEvent
+	-- that is driven by the server-side ReplicationService bridge.
+	-- This guarantees the UI works even if EventManager is
+	-- disabled client-side.
 	local remotes = ReplicatedStorage:WaitForChild("Remotes")
-	local bombEvent = remotes:WaitForChild("BombEvent")
+	local bombReplication = remotes:WaitForChild("BombReplication")
 
 	self._maid:GiveTask(
-		bombEvent.OnClientEvent:Connect(function(action: string, ...)
-			print("BombEvent received:", action)
-
+		bombReplication.OnClientEvent:Connect(function(action: string, ...)
 			if action == "Assigned" then
 				local holder, durationSeconds = ...
-
-				if holder then
-					print("BombAssigned received", holder.Name, durationSeconds)
-				end
-
 				self:OnBombAssigned(holder, durationSeconds)
 
 			elseif action == "Transferred" then
 				local fromPlayer, toPlayer = ...
-
-				if fromPlayer and toPlayer then
-					print("BombTransferred received", fromPlayer.Name, toPlayer.Name)
-				end
-
 				self:OnBombTransferred(fromPlayer, toPlayer)
 
 			elseif action == "Exploded" then
 				local holder = ...
-
-				if holder then
-					print("BombExploded received", holder.Name)
-				end
-
 				self:OnBombExploded(holder)
 
-			elseif action == "RoundEnded" then
-				print("RoundEnded received")
+			elseif action == "Cleared" then
 				self:ClearBombVisuals()
 			end
 		end)

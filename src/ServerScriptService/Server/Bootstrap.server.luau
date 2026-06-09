@@ -17,6 +17,8 @@ local serviceModules = {
 	"AdminService",
 	"CommandService",
 	"BombManager",
+	"InteractionService",
+	"ReplicationService",
 	"TagDetectionService",
 	"RoundManager",
 	"GameManager",

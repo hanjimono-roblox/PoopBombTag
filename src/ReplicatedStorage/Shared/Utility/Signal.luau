@@ -63,6 +63,21 @@ end
 
 function Signal:Fire(...: any)
 	local selfAny = self :: any
+	-- DIAGNOSTIC: count the listeners we are about to invoke.
+	-- If this number is >1 for a given event in the steady
+	-- state, the caller has subscribed multiple times -- and
+	-- every Fire will multiply the side effects by that factor.
+	-- This is the single most likely cause of the "x124" loop
+	-- the user reported.
+	local listenerCount = 0
+	for _, entry in ipairs(selfAny._connections) do
+		if entry.Connection.Connected then
+			listenerCount = listenerCount + 1
+		end
+	end
+	if listenerCount > 0 then
+		print(`[Signal] Event Fired To {listenerCount} Listeners`)
+	end
 	for _, entry in ipairs(selfAny._connections) do
 		if entry.Connection.Connected then
 			task.spawn(entry.Callback, ...)

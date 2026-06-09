@@ -6,6 +6,15 @@ return table.freeze({
 	BombAssigned = "BombAssigned",
 	BombTransferred = "BombTransferred",
 	BombExploded = "BombExploded",
+	-- Internal server-side events fired by the authority layer
+	-- (BombManager). These NEVER reach clients directly --
+	-- ReplicationService is the single bridge that translates
+	-- them into RemoteEvent payloads. Consumers that want to
+	-- react to bomb state changes server-side should listen to
+	-- these names.
+	BombAssignedInternal = "BombAssignedInternal",
+	BombTransferredInternal = "BombTransferredInternal",
+	BombExplodedInternal = "BombExplodedInternal",
 	PlayerEliminated = "PlayerEliminated",
 	PlayerReturnedToLobby = "PlayerReturnedToLobby",
 	PlayerWon = "PlayerWon",

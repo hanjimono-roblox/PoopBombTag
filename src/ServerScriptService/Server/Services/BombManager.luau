@@ -1,5 +1,28 @@
 --!strict
 
+-- BombManager (Server, Authority)
+-- The single owner of bomb state. Assumes that every call into a
+-- mutating method is already validated upstream by InteractionService.
+--
+-- This service is intentionally dumb about *who should* get the bomb --
+-- that arbitration is InteractionService's job. BombManager only:
+--   * Stores the current holder.
+--   * Runs the fuse timer.
+--   * Emits INTERNAL server-side events via EventManager.
+--
+-- It MUST NOT:
+--   * Validate tag candidates.
+--   * Track cooldowns.
+--   * Be called from scanning / detection loops.
+--   * Fire RemoteEvents directly. Client replication is the
+--     responsibility of ReplicationService -- BombManager only
+--     announces the state change to the in-process event bus.
+--   * Refuse a transfer because "the call was too soon" -- if a
+--     caller is invoking ExecuteTransfer, arbitration has already
+--     passed. A refusal from this layer means an authority-level
+--     invariant was violated (e.g. holder was reassigned under us)
+--     and is treated as a defensive guard, not a normal flow path.
+
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local BaseService = require(script.Parent.Parent.Framework.BaseService)
@@ -12,62 +35,136 @@ local BombManager = {}
 BombManager.__index = BombManager
 setmetatable(BombManager, { __index = BaseService })
 
-local BombEvent = ReplicatedStorage.Remotes.BombEvent
-
 function BombManager.new()
 	local self: any = BaseService.new("BombManager")
 	self._holder = nil :: Player?
 	self._timerEndTime = 0
 	self._timerThread = nil :: thread?
-	self._lastTransferAt = 0
+	-- In-transfer re-entrancy guard. Set to true at the top of
+	-- any mutating call and cleared at the bottom. The
+	-- authority is the only layer that owns bomb state, so it
+	-- is the only layer that can guarantee no other mutating
+	-- call is in flight. Any future path that tries to call
+	-- ExecuteTransfer while the previous call has not finished
+	-- its synchronous body (e.g. via a callback re-entrancy)
+	-- will be rejected with a defensive "transfer in progress"
+	-- return. This is the inner-most anti-flip primitive.
+	self._isTransferring = false
+	-- DIAGNOSTIC: monotonically increasing transfer sequence
+	-- number. Stamped onto every transfer so we can correlate
+	-- logs across BombManager -> EventManager -> ReplicationService.
+	self._nextTransferId = 0
+	-- DIAGNOSTIC: total number of times ExecuteTransfer has
+	-- been called (including defensive rejections). Used to
+	-- identify re-entrancy.
+	self._executeTransferCalls = 0
 	return setmetatable(self, BombManager)
 end
 
-function BombManager:AssignBomb(player: Player)
+-- AssignBomb is the round-start path. It is called by RoundManager
+-- (a trusted authority caller) and is therefore allowed to mutate
+-- state directly. It does its own validity check because it is the
+-- FIRST holder of a round and has no upstream arbitration to trust.
+function BombManager:AssignBomb(player: Player): boolean
 	if not self:IsValidBombHolder(player) then
+		print("[Bomb] Assign rejected: invalid holder")
 		return false
 	end
 
 	local selfAny = self :: any
 	selfAny._holder = player
 	self:ResetTimer()
-	print("SERVER FIRING BOMB ASSIGNED")
-	BombEvent:FireAllClients(
-		"Assigned",
+
+	-- INTERNAL event only. ReplicationService is the sole consumer
+	-- that translates this into a RemoteEvent payload for clients.
+	EventManager:Fire(
+		EventNames.BombAssignedInternal,
 		player,
 		GameConfig.Bomb.DurationSeconds
 	)
 	return true
 end
 
-function BombManager:TransferBomb(fromPlayer: Player, toPlayer: Player): boolean
-	print("[Bomb] TransferBomb called", fromPlayer.Name, "->", toPlayer.Name)
+-- ExecuteTransfer is the tag path. The contract is:
+--   "If I am called, it is already valid."
+-- InteractionService has already done:
+--   * per-pair cooldown + global lock checks
+--   * holder identity check
+--   * validity check on the target
+--   * live distance check
+-- The only refusal paths that remain here are defensive guards
+-- against a true race (e.g. the holder was reset to nil between
+-- the arbitration decision and this call) -- not gameplay logic.
+function BombManager:ExecuteTransfer(fromPlayer: Player, toPlayer: Player): boolean
 	local selfAny = self :: any
+
+	-- DIAGNOSTIC: count every entry to ExecuteTransfer, before
+	-- any guard. This is the single number that reveals whether
+	-- the resolver is re-entering or not.
+	selfAny._executeTransferCalls = selfAny._executeTransferCalls + 1
+	print(
+		`[Bomb] ExecuteTransfer Call #{selfAny._executeTransferCalls} `
+		.. `from={fromPlayer.Name} to={toPlayer.Name}`
+	)
+
+	-- GUARD 1: in-transfer re-entrancy. If a previous call into
+	-- a mutating method is still on the call stack (e.g. a
+	-- callback fired another transfer synchronously), refuse
+	-- the new call. This is the inner-most anti-flip primitive
+	-- and defends against any future path that might chain
+	-- transfers without yielding the scheduler.
+	if selfAny._isTransferring then
+		print("[Bomb] Transfer rejected: re-entrant call (in-transfer)")
+		return false
+	end
+	selfAny._isTransferring = true
+
+	-- Allocate the per-transfer id ONLY for calls that pass
+	-- the in-transfer guard. Stamped onto the log lines that
+	-- follow so we can correlate the same logical transfer
+	-- across the pipeline.
+	local transferId = selfAny._nextTransferId
+	selfAny._nextTransferId = transferId + 1
+	print(`[Transfer #{transferId}] ExecuteTransfer ENTRY from={fromPlayer.Name} to={toPlayer.Name}`)
+
+	-- GUARD 2: holder-mismatch. The caller identified
+	-- `fromPlayer` as the expected current holder, but the
+	-- authority has moved on. This is a true race: the
+	-- arbitration decision is stale by the time we got here.
 	if selfAny._holder ~= fromPlayer then
-		print("[Bomb] Transfer failed: holder mismatch")
+		print(`[Transfer #{transferId}] REJECTED: holder mismatch`)
+		selfAny._isTransferring = false
 		return false
 	end
 
-	if not self:IsValidBombHolder(toPlayer) then
-		print("[Bomb] Transfer failed: target not valid holder")
+	-- GUARD 3: identity-state safety. If the requested target
+	-- is already the holder, the state is already applied --
+	-- do nothing. This protects against any future call site
+	-- (e.g. a buggy client intent, a misbehaving admin tool)
+	-- that asks for a "transfer" to the current holder.
+	if selfAny._holder == toPlayer then
+		print(`[Transfer #{transferId}] REJECTED: target == holder (idempotent no-op)`)
+		selfAny._isTransferring = false
 		return false
 	end
 
-	local now = TimeUtil.Now()
-	if now - selfAny._lastTransferAt < GameConfig.Bomb.TransferCooldownSeconds then
-		print("[Bomb] Transfer failed: cooldown")
-		return false
-	end
-
-	selfAny._lastTransferAt = now
+	-- Commit. We do NOT re-check IsValidBombHolder on the
+	-- target here -- the arbitration layer just did, and a
+	-- target that became invalid in the microseconds since is
+	-- not our problem to fix; it will surface on the next
+	-- assignment.
 	selfAny._holder = toPlayer
 	self:ResetTimer()
-	BombEvent:FireAllClients(
-		"Transferred",
-		fromPlayer,
-		toPlayer
-	)
-	print("[Bomb] Transfer successful")
+
+	-- INTERNAL event only. ReplicationService is the sole
+	-- consumer that translates this into a RemoteEvent payload
+	-- for clients. It must NEVER call back into gameplay
+	-- services -- it is pure output.
+	print(`[Transfer #{transferId}] Event Fired`)
+	EventManager:Fire(EventNames.BombTransferredInternal, fromPlayer, toPlayer)
+
+	print(`[Transfer #{transferId}] ExecuteTransfer SUCCESS`)
+	selfAny._isTransferring = false
 	return true
 end
 
@@ -98,10 +195,11 @@ function BombManager:ExplodeBomb(): boolean
 
 	selfAny._holder = nil
 	selfAny._timerThread = nil
-	BombEvent:FireAllClients(
-		"Exploded",
-		holder
-	)
+
+	-- INTERNAL event only. Note that PlayerEliminated is also
+	-- fired on this authority transition because the bomb
+	-- exploding is what eliminates the holder in a normal round.
+	EventManager:Fire(EventNames.BombExplodedInternal, holder)
 	EventManager:Fire(EventNames.PlayerEliminated, holder, "BombExploded")
 	return true
 end
@@ -128,38 +226,8 @@ function BombManager:GetRemainingTime(): number
 	return TimeUtil.SecondsRemaining(selfAny._timerEndTime)
 end
 
-function BombManager:ValidateTag(fromPlayer: Player, toPlayer: Player): boolean
-	local selfAny = self :: any
-	if fromPlayer == toPlayer or selfAny._holder ~= fromPlayer then
-		return false
-	end
-
-	if not self:IsValidBombHolder(toPlayer) then
-		return false
-	end
-
-	local fromRoot = self:GetRootPart(fromPlayer)
-	local toRoot = self:GetRootPart(toPlayer)
-	if not fromRoot or not toRoot then
-		return false
-	end
-
-	local multiplier = self.Services:Get("MovementService"):GetTagRangeMultiplier(fromPlayer)
-	local allowedDistance = GameConfig.Bomb.TagDistanceStuds * multiplier
-	return (fromRoot.Position - toRoot.Position).Magnitude <= allowedDistance
-end
-
-function BombManager:TryTag(fromPlayer: Player, toPlayer: Player): boolean
-	print("[Bomb] TryTag called", fromPlayer.Name, "->", toPlayer.Name)
-	if not self:ValidateTag(fromPlayer, toPlayer) then
-		print("[Bomb] TryTag rejected: ValidateTag failed")
-		return false
-	end
-	print("[Bomb] TryTag ValidateTag passed")
-
-	return self:TransferBomb(fromPlayer, toPlayer)
-end
-
+-- Read-only helpers used by InteractionService during arbitration.
+-- These do not mutate state and are safe to call from any layer.
 function BombManager:IsValidBombHolder(player: Player): boolean
 	local state = self.Services:Get("PlayerManager"):GetState(player)
 	return state ~= nil and state.InRound and state.Alive
