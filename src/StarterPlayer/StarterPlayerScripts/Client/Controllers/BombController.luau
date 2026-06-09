@@ -35,7 +35,7 @@ setmetatable(BombController, { __index = BaseController })
 -- controller so designers can tweak the feel without touching game config.
 -- ---------------------------------------------------------------------------
 local BOMB_MODEL_NAME = "PoopBombModel"        -- cloned onto the holder's character
-local BOMB_ATTACH_OFFSET = CFrame.new(0, 2.5, -1.2) * CFrame.Angles(math.rad(-15), 0, 0)
+local BOMB_ATTACH_OFFSET = CFrame.new(0, -0.25, -0.6) *	CFrame.Angles(math.rad(-90), math.rad(90), 0)
 local TRANSFER_VFX_NAME = "BombTransferVFX"    -- a ParticleEmitter parent created in ReplicatedFirst
 local EXPLOSION_VFX_NAME = "BombExplosionVFX"  -- a ParticleEmitter parent created in ReplicatedFirst
 
@@ -172,57 +172,101 @@ end
 
 function BombController:EnsureBombVisuals()
 	local holder = self._currentHolder
+
 	if not holder or not holder.Parent then
-		-- Holder has left or is invalid -- tear down any stale visuals.
 		self:_DestroyBombAttachment()
 		return
 	end
 
-	-- Find a place to source the bomb model from.  ReplicatedStorage is
-	-- the right home for cosmetic assets shared with the client.  If the
-	-- asset isn't there yet, just skip -- the rest of the UI/feedback
-	-- (timer, sounds) will still work without the visual model.
+	if self._bombAttachment and self._bombAttachment.Parent then
+		return
+	end
+
 	local sourceTemplate = ReplicatedStorage:FindFirstChild(BOMB_MODEL_NAME)
 	if not sourceTemplate or not sourceTemplate:IsA("Model") then
 		return
 	end
 
-	-- Idempotent: if the attachment is already parented to a valid
-	-- character, leave it alone.
-	if self._bombAttachment and self._bombAttachment.Parent then
-		return
-	end
-
 	local character = holder.Character
 	if not character then
-		-- Character may not be loaded yet (just respawned).  Try again
-		-- the next render frame; harmless because the loop polls
-		-- EnsureBombVisuals whenever the holder changes.
 		return
 	end
 
-	local rootPart = character:FindFirstChild("HumanoidRootPart")
-	if not rootPart or not rootPart:IsA("BasePart") then
+	local handPart = character:FindFirstChild("RightHand")
+	if not handPart or not handPart:IsA("BasePart") then
+		warn("RightHand not found")
 		return
 	end
 
-	-- Clone the template so each holder can have their own weld without
-	-- fighting the original.
+	----------------------------------------------------------------
+	-- Clone bomb
+	----------------------------------------------------------------
+
 	local bomb = sourceTemplate:Clone()
-
-	-- Weld to the head/root so the bomb follows the holder.  A Weld
-	-- constraint keeps the relationship declarative and replication-safe.
-	local weld = Instance.new("WeldConstraint")
-	weld.Part0 = rootPart
-	weld.Part1 = bomb.PrimaryPart or bomb:FindFirstChildWhichIsA("BasePart")
-	weld.Parent = bomb
-	bomb:PivotTo(rootPart.CFrame * BOMB_ATTACH_OFFSET)
 	bomb.Parent = character
+
+	if not bomb.PrimaryPart then
+		local firstPart = bomb:FindFirstChildWhichIsA("BasePart", true)
+
+		if not firstPart then
+			warn("Bomb contains no BaseParts")
+			bomb:Destroy()
+			return
+		end
+
+		bomb.PrimaryPart = firstPart
+	end
+
+	----------------------------------------------------------------
+	-- Physics setup
+	----------------------------------------------------------------
+
+	for _, obj in ipairs(bomb:GetDescendants()) do
+		if obj:IsA("BasePart") then
+			obj.Anchored = false
+			obj.CanCollide = false
+			obj.CanTouch = false
+			obj.CanQuery = false
+			obj.Massless = true
+		end
+	end
+
+	----------------------------------------------------------------
+	-- Position bomb FIRST
+	----------------------------------------------------------------
+
+	bomb:PivotTo(handPart.CFrame * BOMB_ATTACH_OFFSET)
+
+	----------------------------------------------------------------
+	-- Weld every bomb part to PrimaryPart
+	----------------------------------------------------------------
+
+	for _, obj in ipairs(bomb:GetDescendants()) do
+		if obj:IsA("BasePart") and obj ~= bomb.PrimaryPart then
+			local wc = Instance.new("WeldConstraint")
+			wc.Part0 = bomb.PrimaryPart
+			wc.Part1 = obj
+			wc.Parent = obj
+		end
+	end
+
+	----------------------------------------------------------------
+	-- Weld bomb to hand
+	----------------------------------------------------------------
+
+	local handWeld = Instance.new("WeldConstraint")
+	handWeld.Part0 = handPart
+	handWeld.Part1 = bomb.PrimaryPart
+	handWeld.Parent = bomb.PrimaryPart
 
 	self._bombAttachment = bomb
 
-	-- Find / create a tick Sound inside the model so it is positional.
+	----------------------------------------------------------------
+	-- Tick sound
+	----------------------------------------------------------------
+
 	local tickSound = bomb:FindFirstChild(TICK_SOUND_NAME)
+
 	if not tickSound or not tickSound:IsA("Sound") then
 		tickSound = Instance.new("Sound")
 		tickSound.Name = TICK_SOUND_NAME
@@ -231,6 +275,7 @@ function BombController:EnsureBombVisuals()
 		tickSound.PlaybackRate = TICK_NORMAL_RATE
 		tickSound.Parent = bomb
 	end
+
 	tickSound:Play()
 	self._tickSound = tickSound
 end
