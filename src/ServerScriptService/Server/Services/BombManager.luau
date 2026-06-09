@@ -188,7 +188,7 @@ function BombManager:ExecuteTransfer(fromPlayer: Player, toPlayer: Player): bool
 	-- for clients. It must NEVER call back into gameplay
 	-- services -- it is pure output.
 	print(`[Transfer #{transferId}] Event Fired`)
-	EventManager:Fire(EventNames.BombTransferredInternal, fromPlayer, toPlayer)
+	EventManager:Fire(EventNames.BombTransferredInternal, fromPlayer, toPlayer, GameConfig.Bomb.DurationSeconds)
 
 	print(`[Transfer #{transferId}] ExecuteTransfer SUCCESS`)
 	selfAny._isTransferring = false

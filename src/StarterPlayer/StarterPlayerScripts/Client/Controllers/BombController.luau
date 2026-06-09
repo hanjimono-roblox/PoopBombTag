@@ -105,8 +105,8 @@ function BombController:Start()
 				self:OnBombAssigned(holder, durationSeconds)
 
 			elseif action == "Transferred" then
-				local fromPlayer, toPlayer = ...
-				self:OnBombTransferred(fromPlayer, toPlayer)
+				local fromPlayer, toPlayer, durationSeconds = ...
+				self:OnBombTransferred(fromPlayer, toPlayer, durationSeconds)
 
 			elseif action == "Exploded" then
 				local holder = ...
@@ -142,15 +142,22 @@ function BombController:OnBombAssigned(holder: Player, durationSeconds: number)
 	self:_UpdateTimerLabel(durationSeconds)
 end
 
-function BombController:OnBombTransferred(fromPlayer: Player, toPlayer: Player)
+function BombController:OnBombTransferred(fromPlayer: Player, toPlayer: Player, durationSeconds: number)
+	-- Destroy the old attachment first so the idempotent guard in
+	-- EnsureBombVisuals does not bail out with the bomb still
+	-- parented to the previous holder's character.
+	self:_DestroyBombAttachment()
+
 	-- Always play the transfer feedback so spectators also see/hear it.
 	self:_PlayTransferEffect(fromPlayer, toPlayer)
 
-	-- Re-attach the bomb to the new holder.  The server re-fires
-	-- BombAssigned for the new holder as part of the same logical
-	-- "hand-off" -- we listen to both and the latest one wins.
+	-- Update holder and timer state so the countdown UI activates
+	-- for the new holder (matching the pattern in OnBombAssigned).
 	self._currentHolder = toPlayer
+	self._timerEndTime = TimeUtil.Now() + durationSeconds
 	self:EnsureBombVisuals()
+	self:StartRenderLoop()
+	self:_UpdateTimerLabel(durationSeconds)
 end
 
 function BombController:OnBombExploded(holder: Player)
@@ -298,11 +305,19 @@ end
 -- the expected hierarchy (ScreenGui named "BombHUD" with a TextLabel named
 -- "TimerLabel").  Safe to call multiple times -- caches the result.
 function BombController:_ResolveUI()
+	-- If we have cached references, verify they are still valid.
+	-- ResetOnSpawn can destroy the old GUI and create a new one,
+	-- leaving us with stale references to destroyed instances.
 	if self._ui and self._timerText then
-		return
+		if self._ui.Parent and self._timerText.Parent then
+			return
+		end
+		-- References are stale (GUI was reset on respawn), re-resolve.
+		self._ui = nil
+		self._timerText = nil
 	end
 
-	local playerGui = Players.LocalPlayer:WaitForChild("PlayerGui")
+	local playerGui = Players.LocalPlayer:FindFirstChild("PlayerGui")
 	if not playerGui then
 		return
 	end

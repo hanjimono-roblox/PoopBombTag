@@ -110,9 +110,10 @@ function ReplicationService:Start()
 
 	EventManager:Connect(EventNames.BombTransferredInternal, function(
 		fromPlayer: Player,
-		toPlayer: Player
+		toPlayer: Player,
+		duration: number
 	)
-		self:_Fire("Transferred", fromPlayer, toPlayer)
+		self:_Fire("Transferred", fromPlayer, toPlayer, duration)
 	end)
 	self._connectionCount = self._connectionCount + 1
 	print("[Replication] Connected To BombTransferred (1 connection)")
