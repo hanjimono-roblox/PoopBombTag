@@ -1,0 +1,30 @@
+{
+  "className": "TextLabel",
+  "properties": {
+    "AnchorPoint": [0.5, 0.5],
+    "BackgroundColor3": [0, 0, 0],
+    "BackgroundTransparency": 0.4,
+    "BorderColor3": [0, 0, 0],
+    "BorderSizePixel": 0,
+    "FontFace": {
+      "cachedFaceId": null,
+      "family": "rbxasset://fonts/families/PermanentMarker.json",
+      "style": "Normal",
+      "weight": "Regular"
+    },
+    "Position": [
+      [0.5, 0.0],
+      [0.05, 0.0]
+    ],
+    "Size": [
+      [0.0, 300.0],
+      [0.0, 50.0]
+    ],
+    "Text": "",
+    "TextColor3": [1, 1, 1],
+    "TextScaled": true,
+    "TextSize": 14,
+    "TextWrapped": true,
+    "Visible": false
+  }
+}

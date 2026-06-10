@@ -1,0 +1,30 @@
+{
+  "className": "TextLabel",
+  "properties": {
+    "AnchorPoint": [0.5, 0.5],
+    "BackgroundColor3": [0, 0, 0],
+    "BackgroundTransparency": 0.4,
+    "BorderColor3": [0, 0, 0],
+    "BorderSizePixel": 0,
+    "FontFace": {
+      "cachedFaceId": null,
+      "family": "rbxasset://fonts/families/PermanentMarker.json",
+      "style": "Normal",
+      "weight": "Regular"
+    },
+    "Position": [
+      [0.5, 0.0],
+      [0.4, 0.0]
+    ],
+    "Size": [
+      [0.0, 400.0],
+      [0.0, 80.0]
+    ],
+    "Text": "Waiting for players...",
+    "TextColor3": [1, 1, 1],
+    "TextScaled": true,
+    "TextSize": 14,
+    "TextWrapped": true,
+    "Visible": true
+  }
+}

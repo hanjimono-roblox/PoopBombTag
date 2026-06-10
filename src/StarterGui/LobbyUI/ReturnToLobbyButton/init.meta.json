@@ -1,0 +1,30 @@
+{
+  "className": "TextButton",
+  "properties": {
+    "AnchorPoint": [0.5, 0.5],
+    "BackgroundColor3": [0.8, 0.2, 0.2],
+    "BackgroundTransparency": 0.3,
+    "BorderColor3": [0, 0, 0],
+    "BorderSizePixel": 0,
+    "FontFace": {
+      "cachedFaceId": null,
+      "family": "rbxasset://fonts/families/PermanentMarker.json",
+      "style": "Normal",
+      "weight": "Regular"
+    },
+    "Position": [
+      [0.5, 0.0],
+      [0.85, 0.0]
+    ],
+    "Size": [
+      [0.0, 300.0],
+      [0.0, 60.0]
+    ],
+    "Text": "Return to Lobby",
+    "TextColor3": [1, 1, 1],
+    "TextScaled": true,
+    "TextSize": 14,
+    "TextWrapped": true,
+    "Visible": false
+  }
+}

@@ -18,12 +18,24 @@
 -- does not break UI.
 --
 -- Payload contract (server -> client):
---   type = "Assigned"   : (type, holder: Player, duration: number)
---   type = "Transferred": (type, from: Player, to: Player)
---   type = "Exploded"   : (type, holder: Player)
---   type = "Cleared"    : (type) -- for round-end reset, optional
--- Clients should match on `type` and ignore anything else.
+--   BombReplication:
+--     type = "Assigned"   : (type, holder: Player, duration: number)
+--     type = "Transferred": (type, from: Player, to: Player)
+--     type = "Exploded"   : (type, holder: Player)
+--     type = "Cleared"    : (type)
+--   RoundReplication:
+--     type = "RoundStarted"     : (type, mode: string, players: { Player })
+--     type = "RoundEnded"       : (type, reason: string, winners: { Player })
+--     type = "PlayerWon"        : (type, player: Player)
+--     type = "PlayersWon"       : (type, winners: { Player })
+--     type = "PlayerReturnedToLobby": (type, player: Player)
+--     type = "RoundPlayerLeft"  : (type, player: Player)
+--   AnnouncementEvent:
+--     (message: string)
+--   PlayerAction (client -> server):
+--     action = "ReturnToLobby" : (action: string)
 
+local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local BaseService = require(script.Parent.Parent.Framework.BaseService)
@@ -34,37 +46,23 @@ local ReplicationService = {}
 ReplicationService.__index = ReplicationService
 setmetatable(ReplicationService, { __index = BaseService })
 
--- The single RemoteEvent this service owns. We resolve it
--- lazily inside Start() so the service is robust to Remotes
--- being parented late in the boot sequence.
 local BOMB_REPLICATION_NAME = "BombReplication"
+local ROUND_REPLICATION_NAME = "RoundReplication"
+local ANNOUNCEMENT_EVENT_NAME = "AnnouncementEvent"
+local PLAYER_ACTION_NAME = "PlayerAction"
 
 function ReplicationService.new()
 	local self: any = BaseService.new("ReplicationService")
-	self._remote = nil :: RemoteEvent?
-	-- DIAGNOSTIC: start-once guard. The ServiceRegistry normally
-	-- calls Start() once, but if anything ever calls it twice
-	-- (e.g. via a re-Register, a manual :Start() in tests, or a
-	-- reload) the EventManager subscriptions would be added a
-	-- second time -- and that would cause every Fire to invoke
-	-- each handler twice, which is exactly the failure mode the
-	-- user reported.
+	self._bombRemote = nil :: RemoteEvent?
+	self._roundRemote = nil :: RemoteEvent?
+	self._announcementRemote = nil :: RemoteEvent?
+	self._playerActionRemote = nil :: RemoteEvent?
 	self._started = false
-	-- DIAGNOSTIC: number of connections we have created. Each
-	-- event subscription increments this once. Should always be
-	-- exactly 3 (Assigned, Transferred, Exploded) at steady
-	-- state.
 	self._connectionCount = 0
 	return setmetatable(self, ReplicationService)
 end
 
 function ReplicationService:Start()
-	-- TASK 2 HARDENING: refuse to start a second time. If the
-	-- registry (or any test harness) calls Start() more than
-	-- once, we log a loud error and bail without re-subscribing.
-	-- This is the single most likely cause of "x124 transfers"
-	-- if it ever happens: a re-subscribe multiplies every
-	-- subsequent Fire into N handler invocations.
 	if self._started then
 		print(`[Replication] ERROR: Start() called more than once (already started). Refusing to re-subscribe.`)
 		return
@@ -75,82 +73,139 @@ function ReplicationService:Start()
 
 	print("[Replication] Start")
 
-	-- Resolve the remote ONCE. This is the only place on the
-	-- server that ever references it. If the asset is missing
-	-- we log a structured error and the rest of the server
-	-- keeps running -- gameplay still works, only client UI
-	-- will be stale.
 	local remotes = ReplicatedStorage:FindFirstChild("Remotes")
 	if not remotes then
 		print("[Replication] error: Remotes folder missing")
 		return
 	end
 
-	local remote = remotes:FindFirstChild(BOMB_REPLICATION_NAME)
-	if not remote or not remote:IsA("RemoteEvent") then
+	-- Resolve bomb remote
+	local bombRemote = remotes:FindFirstChild(BOMB_REPLICATION_NAME)
+	if not bombRemote or not bombRemote:IsA("RemoteEvent") then
 		print("[Replication] error: BombReplication RemoteEvent missing")
 		return
 	end
+	self._bombRemote = bombRemote
 
-	self._remote = remote
-
-	-- Subscribe to the three internal authority events. Each
-	-- handler is a thin shim that translates the event into a
-	-- client-facing payload. The server-side event is a struct
-	-- of typed arguments; the client-facing payload uses a
-	-- `type` discriminator as the first field for easy match.
-	-- We count subscriptions so we can verify there is exactly
-	-- one handler per event in the log output.
-
-	EventManager:Connect(EventNames.BombAssignedInternal, function(holder: Player, duration: number)
-		self:_Fire("Assigned", holder, duration)
-	end)
-	self._connectionCount = self._connectionCount + 1
-	print("[Replication] Connected To BombAssigned (1 connection)")
-
-	EventManager:Connect(EventNames.BombTransferredInternal, function(
-		fromPlayer: Player,
-		toPlayer: Player,
-		duration: number
-	)
-		self:_Fire("Transferred", fromPlayer, toPlayer, duration)
-	end)
-	self._connectionCount = self._connectionCount + 1
-	print("[Replication] Connected To BombTransferred (1 connection)")
-
-	EventManager:Connect(EventNames.BombExplodedInternal, function(holder: Player)
-		self:_Fire("Exploded", holder)
-	end)
-	self._connectionCount = self._connectionCount + 1
-	print("[Replication] Connected To BombExploded (1 connection)")
-
-	print(`[Replication] subscribed to internal bomb events ({self._connectionCount} total connections)`)
-end
-
--- Internal helper. Every client-facing payload is a flat tuple
--- with `type` as the first field. We never send nested tables
--- or mixed-type tuples -- Roblox RemoteEvents serialize
--- positional arguments best, and a `type` discriminator keeps
--- client dispatch trivial.
-function ReplicationService:_Fire(payloadType: string, ...)
-	-- DIAGNOSTIC: in case the user is seeing the wrong
-	-- transferId, print it as part of the fire log. We do not
-	-- currently receive a transferId argument on this path;
-	-- this is a generic counter that lets us correlate the
-	-- number of fires against BombManager's per-transfer
-	-- counters.
-	print(`[Replication] fired {payloadType}`)
-	local remote = self._remote
-	if not remote then
-		-- We never reached Start() successfully, or the
-		-- RemoteEvent is missing. Don't crash; just drop the
-		-- payload. The server's authoritative state is still
-		-- intact.
-		print("[Replication] dropped payload (no remote):", payloadType)
+	-- Resolve round remote
+	local roundRemote = remotes:FindFirstChild(ROUND_REPLICATION_NAME)
+	if not roundRemote or not roundRemote:IsA("RemoteEvent") then
+		print("[Replication] error: RoundReplication RemoteEvent missing")
 		return
 	end
+	self._roundRemote = roundRemote
 
+	-- Resolve announcement remote
+	local announcementRemote = remotes:FindFirstChild(ANNOUNCEMENT_EVENT_NAME)
+	if not announcementRemote or not announcementRemote:IsA("RemoteEvent") then
+		print("[Replication] error: AnnouncementEvent RemoteEvent missing")
+		return
+	end
+	self._announcementRemote = announcementRemote
+
+	-- Resolve player action remote (client -> server)
+	local playerActionRemote = remotes:FindFirstChild(PLAYER_ACTION_NAME)
+	if not playerActionRemote or not playerActionRemote:IsA("RemoteEvent") then
+		print("[Replication] error: PlayerAction RemoteEvent missing")
+		return
+	end
+	self._playerActionRemote = playerActionRemote
+
+	-- ---- Bomb replication subscriptions ----
+
+	EventManager:Connect(EventNames.BombAssignedInternal, function(holder: Player, duration: number)
+		self:_FireBomb("Assigned", holder, duration)
+	end)
+	self._connectionCount = self._connectionCount + 1
+
+	EventManager:Connect(EventNames.BombTransferredInternal, function(fromPlayer: Player, toPlayer: Player, duration: number)
+		self:_FireBomb("Transferred", fromPlayer, toPlayer, duration)
+	end)
+	self._connectionCount = self._connectionCount + 1
+
+	EventManager:Connect(EventNames.BombExplodedInternal, function(holder: Player)
+		self:_FireBomb("Exploded", holder)
+	end)
+	self._connectionCount = self._connectionCount + 1
+
+	-- ---- Round replication subscriptions ----
+
+	EventManager:Connect(EventNames.RoundStarted, function(mode: string, players: { Player })
+		self:_FireRound("RoundStarted", mode, players)
+	end)
+	self._connectionCount = self._connectionCount + 1
+
+	EventManager:Connect(EventNames.RoundEnded, function(reason: string, winners: { Player })
+		self:_FireRound("RoundEnded", reason, winners)
+	end)
+	self._connectionCount = self._connectionCount + 1
+
+	EventManager:Connect(EventNames.PlayerWon, function(player: Player)
+		self:_FireRound("PlayerWon", player)
+	end)
+	self._connectionCount = self._connectionCount + 1
+
+	EventManager:Connect(EventNames.PlayersWon, function(winners: { Player })
+		self:_FireRound("PlayersWon", winners)
+	end)
+	self._connectionCount = self._connectionCount + 1
+
+	EventManager:Connect(EventNames.PlayerReturnedToLobby, function(player: Player)
+		self:_FireRound("PlayerReturnedToLobby", player)
+	end)
+	self._connectionCount = self._connectionCount + 1
+
+	EventManager:Connect(EventNames.RoundPlayerLeft, function(player: Player)
+		self:_FireRound("RoundPlayerLeft", player)
+	end)
+	self._connectionCount = self._connectionCount + 1
+
+	-- ---- Player action listener (client -> server) ----
+
+	self._playerActionRemote.OnServerEvent:Connect(function(player: Player, action: string, ...)
+		if action == "ReturnToLobby" then
+			local roundManager = self.Services:Get("RoundManager")
+			if roundManager then
+				roundManager:ReturnPlayerToLobby(player)
+			end
+		end
+	end)
+	self._connectionCount = self._connectionCount + 1
+
+	print(`[Replication] subscribed to all events ({self._connectionCount} total connections)`)
+end
+
+-- ---- Fire helpers ----
+
+function ReplicationService:_FireBomb(payloadType: string, ...)
+	print(`[Replication] bomb fired {payloadType}`)
+	local remote = self._bombRemote
+	if not remote then
+		print("[Replication] dropped bomb payload (no remote):", payloadType)
+		return
+	end
 	remote:FireAllClients(payloadType, ...)
+end
+
+function ReplicationService:_FireRound(payloadType: string, ...)
+	print(`[Replication] round fired {payloadType}`)
+	local remote = self._roundRemote
+	if not remote then
+		print("[Replication] dropped round payload (no remote):", payloadType)
+		return
+	end
+	remote:FireAllClients(payloadType, ...)
+end
+
+-- Exposed so other services can broadcast announcements through the
+-- single ReplicationService bridge rather than touching RemoteEvents directly.
+function ReplicationService:BroadcastAnnouncement(message: string)
+	local remote = self._announcementRemote
+	if not remote then
+		print("[Replication] dropped announcement (no remote)")
+		return
+	end
+	remote:FireAllClients(message)
 end
 
 return ReplicationService
