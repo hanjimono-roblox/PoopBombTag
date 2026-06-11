@@ -57,6 +57,9 @@ function PlayerManager:CreateState(player: Player): PlayerState
 			Poop = 0,
 			EquippedItems = {},
 			OwnedItems = {},
+			ItemLevels = {},
+			ConsumableCounts = {},
+			OneTimePurchases = {},
 		}
 		local selfAny = self :: any
 		selfAny._states[player] = placeholder
@@ -70,6 +73,9 @@ function PlayerManager:CreateState(player: Player): PlayerState
 		Poop = profile.Poop,
 		EquippedItems = profile.EquippedItems,
 		OwnedItems = profile.OwnedItems,
+		ItemLevels = profile.ItemLevels or {},
+		ConsumableCounts = profile.ConsumableCounts or {},
+		OneTimePurchases = profile.OneTimePurchases or {},
 	}
 
 	local selfAny = self :: any
@@ -101,14 +107,17 @@ function PlayerManager:_RetryLoadOrKick(player: Player)
 				-- Success: replace the placeholder state with the real one
 				-- and refresh the leaderstats so the player sees their
 				-- real balance.
-				local state: PlayerState = {
-					Alive = false,
-					Spectating = false,
-					InRound = false,
-					Poop = profile.Poop,
-					EquippedItems = profile.EquippedItems,
-					OwnedItems = profile.OwnedItems,
-				}
+			local state: PlayerState = {
+				Alive = false,
+				Spectating = false,
+				InRound = false,
+				Poop = profile.Poop,
+				EquippedItems = profile.EquippedItems,
+				OwnedItems = profile.OwnedItems,
+				ItemLevels = profile.ItemLevels or {},
+				ConsumableCounts = profile.ConsumableCounts or {},
+				OneTimePurchases = profile.OneTimePurchases or {},
+			}
 				local selfAny = self :: any
 				selfAny._states[player] = state
 				self:EnsureLeaderstats(player, state)

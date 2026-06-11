@@ -1,0 +1,12 @@
+{
+  "className": "ScrollingFrame",
+  "properties": {
+    "BackgroundColor3": [0.06, 0.06, 0.08],
+    "BorderColor3": [0.15, 0.15, 0.2],
+    "Position": [[0.0, 160.0], [0.0, 115.0]],
+    "ScrollBarThickness": 8,
+    "ScrollingDirection": "Y",
+    "Size": [[0.0, 560.0], [0.0, 470.0]],
+    "ZIndex": 2
+  }
+}

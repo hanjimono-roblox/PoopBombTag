@@ -14,6 +14,9 @@ type Profile = {
 	Poop: number,
 	OwnedItems: { [string]: boolean },
 	EquippedItems: { [string]: string },
+	ItemLevels: { [string]: number },
+	ConsumableCounts: { [string]: number },
+	OneTimePurchases: { [string]: boolean },
 }
 
 -- Returns a fresh, complete default profile. Used both for first-time-join
@@ -23,6 +26,9 @@ local function BuildDefaultProfile(): Profile
 		Poop = 0,
 		OwnedItems = {},
 		EquippedItems = {},
+		ItemLevels = {},
+		ConsumableCounts = {},
+		OneTimePurchases = {},
 	}
 end
 

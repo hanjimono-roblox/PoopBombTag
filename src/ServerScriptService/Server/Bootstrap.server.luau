@@ -8,6 +8,7 @@ local registry = ServiceRegistry.new()
 local serviceModules = {
 	"LoggingService",
 	"DataManager",
+	"CatalogService",
 	"PlayerManager",
 	"MovementService",
 	"CurrencyManager",
@@ -22,6 +23,7 @@ local serviceModules = {
 	"TagDetectionService",
 	"RoundManager",
 	"GameManager",
+	"ShopService",
 }
 
 for _, serviceName in ipairs(serviceModules) do

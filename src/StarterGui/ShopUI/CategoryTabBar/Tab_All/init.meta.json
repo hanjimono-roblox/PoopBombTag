@@ -1,0 +1,27 @@
+{
+  "className": "TextButton",
+  "properties": {
+    "BackgroundColor3": [0.2, 0.2, 0.3],
+    "BackgroundTransparency": 0,
+    "BorderColor3": [0.3, 0.3, 0.4],
+    "BorderSizePixel": 1,
+    "FontFace": {
+      "family": "rbxasset://fonts/families/PermanentMarker.json",
+      "weight": "Regular",
+      "style": "Normal"
+    },
+    "Position": [
+      [0.0, 5.0],
+      [0.0, 5.0]
+    ],
+    "Size": [
+      [0.0, 140.0],
+      [0.0, 45.0]
+    ],
+    "Text": "📋 All Items",
+    "TextColor3": [1, 1, 1],
+    "TextScaled": true,
+    "Visible": true,
+    "ZIndex": 4
+  }
+}

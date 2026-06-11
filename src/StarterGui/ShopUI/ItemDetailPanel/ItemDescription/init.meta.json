@@ -1,0 +1,28 @@
+{
+  "className": "TextLabel",
+  "properties": {
+    "BackgroundColor3": [0, 0, 0],
+    "BackgroundTransparency": 1,
+    "Position": [
+      [0.5, 0.0],
+      [0.0, 205.0]
+    ],
+    "Size": [
+      [0.9, 0.0],
+      [0.0, 50.0]
+    ],
+    "AnchorPoint": [0.5, 0.0],
+    "FontFace": {
+      "family": "rbxasset://fonts/families/PermanentMarker.json",
+      "weight": "Regular",
+      "style": "Normal"
+    },
+    "Text": "Item description goes here.",
+    "TextColor3": [0.8, 0.8, 0.8],
+    "TextScaled": true,
+    "TextWrapped": true,
+    "TextXAlignment": "Center",
+    "Visible": true,
+    "ZIndex": 4
+  }
+}

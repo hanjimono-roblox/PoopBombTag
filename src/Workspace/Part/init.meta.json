@@ -1,0 +1,11 @@
+{
+  "className": "Part",
+  "properties": {
+    "Anchored": true,
+    "BottomSurface": "Smooth",
+    "CFrame": [13, 50, -29, 1, 0, 0, 0, 1, 0, 0, 0, 1],
+    "Size": [14, 32, 16],
+    "Tags": ["Climbable"],
+    "TopSurface": "Smooth"
+  }
+}

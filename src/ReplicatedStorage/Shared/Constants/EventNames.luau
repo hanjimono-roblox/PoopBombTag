@@ -29,4 +29,14 @@ return table.freeze({
 	MovementStateChanged = "MovementStateChanged",
 	DataLoaded = "DataLoaded",
 	DataSaved = "DataSaved",
+
+	-- Shop system events
+	ItemPurchased = "ItemPurchased",
+	ItemEquipped = "ItemEquipped",
+	ItemUnequipped = "ItemUnequipped",
+	ItemUsed = "ItemUsed",
+	ShopOpened = "ShopOpened",
+	ShopClosed = "ShopClosed",
+	CatalogReplicated = "CatalogReplicated",
+	InventoryUpdated = "InventoryUpdated",
 })
