@@ -1,4 +1,26 @@
 --!strict
+--[[
+	PlayerManager (Server)
+	Manages persistent player data: profiles, Poop currency, inventory,
+	leaderstats, and character spawning.
+
+	This service OWNS:
+	  * Data profiles and persistence
+	  * Leaderstats creation and sync
+	  * Poop currency storage
+	  * Inventory/equipped items storage
+	  * Character spawning on join (into the lobby)
+
+	This service MUST NOT:
+	  * Track participation state (defer to PlayerStateService)
+	  * Determine who is in a round (defer to PlayerStateService)
+	  * Track alive/spectating/inRound booleans (defer to PlayerStateService)
+
+	The old PlayerState.Active, .Spectating, .InRound booleans are
+	DEPRECATED. All participation state now flows through PlayerStateService.
+	The PlayerState type retains data fields (Poop, inventory, etc.) but
+	gameplay booleans are no longer used.
+]]
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -37,6 +59,10 @@ function PlayerManager:Start()
 	end
 end
 
+-- ---------------------------------------------------------------------------
+-- State Creation & Data Loading
+-- ---------------------------------------------------------------------------
+
 function PlayerManager:CreateState(player: Player): PlayerState
 	local dataManager = self.Services:Get("DataManager")
 	local profile = dataManager:GetProfile(player) or dataManager:LoadProfile(player)
@@ -51,6 +77,8 @@ function PlayerManager:CreateState(player: Player): PlayerState
 		-- GetState(player) get something non-nil. The real state will
 		-- overwrite this once the load succeeds.
 		local placeholder: PlayerState = {
+			-- DEPRECATED: these booleans are no longer the source of truth
+			-- for gameplay state. Use PlayerStateService for participation.
 			Alive = false,
 			Spectating = false,
 			InRound = false,
@@ -67,9 +95,12 @@ function PlayerManager:CreateState(player: Player): PlayerState
 	end
 
 	local state: PlayerState = {
+		-- DEPRECATED: these booleans are no longer the source of truth
+		-- for gameplay state. Use PlayerStateService for participation.
 		Alive = false,
 		Spectating = false,
 		InRound = false,
+
 		Poop = profile.Poop,
 		EquippedItems = profile.EquippedItems,
 		OwnedItems = profile.OwnedItems,
@@ -83,13 +114,23 @@ function PlayerManager:CreateState(player: Player): PlayerState
 
 	self:EnsureLeaderstats(player, state)
 	EventManager:Fire(EventNames.PlayerStateChanged, player, state)
+
+	-- Spawn the player in the lobby. The PlayerStateService will have
+	-- already set their state to Lobby (it starts before us).
+	-- We need to defer slightly so the character has time to load.
+	task.delay(0.5, function()
+		if player.Parent then
+			local spawnService = self.Services:Get("SpawnService")
+			if spawnService then
+				spawnService:SpawnInLobby(player)
+			end
+		end
+	end)
+
 	return state
 end
 
--- Backs the LoadProfile retry path. We give the load a small number of
--- attempts (so transient DataStore hiccups don't kick paying players)
--- and only kick as a last resort. The kick message tells the player
--- they can rejoin -- a single failed load is not a ban.
+-- Backs the LoadProfile retry path.
 function PlayerManager:_RetryLoadOrKick(player: Player)
 	local dataManager = self.Services:Get("DataManager")
 	local MAX_RETRIES = 3
@@ -104,41 +145,46 @@ function PlayerManager:_RetryLoadOrKick(player: Player)
 			task.wait(RETRY_DELAY_SECONDS)
 			local profile = dataManager:LoadProfile(player)
 			if profile then
-				-- Success: replace the placeholder state with the real one
-				-- and refresh the leaderstats so the player sees their
-				-- real balance.
-			local state: PlayerState = {
-				Alive = false,
-				Spectating = false,
-				InRound = false,
-				Poop = profile.Poop,
-				EquippedItems = profile.EquippedItems,
-				OwnedItems = profile.OwnedItems,
-				ItemLevels = profile.ItemLevels or {},
-				ConsumableCounts = profile.ConsumableCounts or {},
-				OneTimePurchases = profile.OneTimePurchases or {},
-			}
+				local state: PlayerState = {
+					Alive = false,
+					Spectating = false,
+					InRound = false,
+					Poop = profile.Poop,
+					EquippedItems = profile.EquippedItems,
+					OwnedItems = profile.OwnedItems,
+					ItemLevels = profile.ItemLevels or {},
+					ConsumableCounts = profile.ConsumableCounts or {},
+					OneTimePurchases = profile.OneTimePurchases or {},
+				}
 				local selfAny = self :: any
 				selfAny._states[player] = state
 				self:EnsureLeaderstats(player, state)
 				EventManager:Fire(EventNames.PlayerStateChanged, player, state)
+
+				-- Spawn in lobby on successful retry.
+				task.delay(0.5, function()
+					if player.Parent then
+						local spawnService = self.Services:Get("SpawnService")
+						if spawnService then
+							spawnService:SpawnInLobby(player)
+						end
+					end
+				end)
+
 				return
 			end
 		end
 
-		-- All retries exhausted. Kick with a friendly message; the player
-		-- can rejoin and try again.
 		if player and player.Parent then
 			player:Kick("Your player data could not be loaded. Please rejoin.")
 		end
 	end)
 end
 
--- Creates the standard Roblox `leaderstats` folder on the player (so the
--- in-game leaderboard shows up) and attaches a `Poop` IntValue that is kept
--- in sync with the authoritative PlayerState. Re-creating it on a subsequent
--- state creation (e.g. after a profile reload) is safe: the existing folder
--- is reused and only the value is refreshed.
+-- ---------------------------------------------------------------------------
+-- Leaderstats
+-- ---------------------------------------------------------------------------
+
 function PlayerManager:EnsureLeaderstats(player: Player, state: PlayerState)
 	if not player or not player.Parent then
 		return
@@ -161,11 +207,20 @@ function PlayerManager:EnsureLeaderstats(player: Player, state: PlayerState)
 	poopValue.Value = math.max(0, math.floor(state.Poop or 0))
 end
 
+-- ---------------------------------------------------------------------------
+-- State Access (Data Only)
+-- ---------------------------------------------------------------------------
+
+-- Returns the data state for a player (profile data, Poop, inventory).
+-- Participation state (Lobby, ActiveParticipant, etc.) is in PlayerStateService.
 function PlayerManager:GetState(player: Player): PlayerState?
 	local selfAny = self :: any
 	return selfAny._states[player]
 end
 
+-- DEPRECATED: Use PlayerStateService:SetState(player, state) instead.
+-- These methods remain for backward compatibility with existing code
+-- that may call them, but they now delegate to PlayerStateService.
 function PlayerManager:SetInRound(player: Player, inRound: boolean)
 	local state = self:GetState(player)
 	if not state then
@@ -175,7 +230,14 @@ function PlayerManager:SetInRound(player: Player, inRound: boolean)
 	state.InRound = inRound
 	state.Alive = inRound
 	state.Spectating = not inRound
-	EventManager:Fire(EventNames.PlayerStateChanged, player, state)
+
+	-- Delegate to PlayerStateService for authoritative state.
+	local stateService = self.Services:Get("PlayerStateService")
+	if inRound then
+		stateService:SetState(player, "ActiveParticipant")
+	else
+		stateService:SetState(player, "Lobby")
+	end
 end
 
 function PlayerManager:SetAlive(player: Player, alive: boolean)
@@ -186,33 +248,21 @@ function PlayerManager:SetAlive(player: Player, alive: boolean)
 
 	state.Alive = alive
 	state.Spectating = not alive and state.InRound
-	EventManager:Fire(EventNames.PlayerStateChanged, player, state)
+
+	if not alive and state.InRound then
+		self.Services:Get("PlayerStateService"):SetState(player, "Eliminated")
+	end
 end
 
+-- DEPRECATED: Use PlayerStateService:GetActiveParticipants() or
+-- PlayerStateService:GetPlayersInState("ActiveParticipant").
 function PlayerManager:GetRoundPlayers(): { Player }
-	local players = {}
-
-	local selfAny = self :: any
-	for player, state in pairs(selfAny._states) do
-		if state.InRound then
-			table.insert(players, player)
-		end
-	end
-
-	return players
+	return self.Services:Get("PlayerStateService"):GetActiveParticipants()
 end
 
+-- DEPRECATED: Use PlayerStateService:GetActiveParticipants().
 function PlayerManager:GetAlivePlayers(): { Player }
-	local alivePlayers = {}
-
-	local selfAny = self :: any
-	for player, state in pairs(selfAny._states) do
-		if state.InRound and state.Alive then
-			table.insert(alivePlayers, player)
-		end
-	end
-
-	return alivePlayers
+	return self.Services:Get("PlayerStateService"):GetActiveParticipants()
 end
 
 return PlayerManager

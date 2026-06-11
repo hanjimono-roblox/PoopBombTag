@@ -16,7 +16,41 @@ setmetatable(MapManager, { __index = BaseService })
 function MapManager.new()
 	local self: any = BaseService.new("MapManager")
 	self._activeMap = nil :: Instance?
+	self._lobbyMap = nil :: Instance?
 	return setmetatable(self, MapManager)
+end
+
+function MapManager:Start()
+	BaseService.Start(self)
+
+	-- Load the lobby into the workspace on server start so players
+	-- have somewhere to spawn and the ArenaEntryZone is detectable.
+	self:LoadLobby()
+end
+
+-- Loads the lobby map from ServerStorage into Workspace. The lobby
+-- is persistent across rounds and is only unloaded on server shutdown.
+-- Players spawn here when they join and are returned here after rounds.
+function MapManager:LoadLobby(): Instance?
+	local selfAny = self :: any
+	if selfAny._lobbyMap and selfAny._lobbyMap.Parent then
+		return selfAny._lobbyMap
+	end
+
+	local mapsFolder = ServerStorage:FindFirstChild("Maps")
+	local lobbySource = mapsFolder and mapsFolder:FindFirstChild("Lobby")
+	if not lobbySource then
+		self.Services:Get("LoggingService"):Warn("MAP", "Missing lobby map in ServerStorage/Maps/Lobby")
+		return nil
+	end
+
+	local lobby = lobbySource:Clone()
+	lobby.Name = "Lobby"
+	lobby.Parent = Workspace
+	selfAny._lobbyMap = lobby
+
+	self.Services:Get("LoggingService"):Info("MAP", "Lobby loaded into Workspace")
+	return lobby
 end
 
 function MapManager:SelectRandomMap(): string

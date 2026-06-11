@@ -30,6 +30,9 @@ return table.freeze({
 	DataLoaded = "DataLoaded",
 	DataSaved = "DataSaved",
 
+	-- Arena-driven participation events
+	ArenaEntered = "ArenaEntered",
+
 	-- Shop system events
 	ItemPurchased = "ItemPurchased",
 	ItemEquipped = "ItemEquipped",

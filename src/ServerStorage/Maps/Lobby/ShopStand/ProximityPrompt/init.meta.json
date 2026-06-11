@@ -1,0 +1,6 @@
+{
+  "className": "ProximityPrompt",
+  "properties": {
+    "RequiresLineOfSight": false
+  }
+}

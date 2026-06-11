@@ -278,9 +278,9 @@ end
 
 -- Read-only helpers used by InteractionService during arbitration.
 -- These do not mutate state and are safe to call from any layer.
+-- Uses PlayerStateService: only ActiveParticipants are valid holders.
 function BombManager:IsValidBombHolder(player: Player): boolean
-	local state = self.Services:Get("PlayerManager"):GetState(player)
-	return state ~= nil and state.InRound and state.Alive
+	return self.Services:Get("PlayerStateService"):IsParticipant(player)
 end
 
 function BombManager:GetRootPart(player: Player): BasePart?

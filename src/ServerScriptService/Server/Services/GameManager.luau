@@ -1,4 +1,19 @@
 --!strict
+--[[
+	GameManager (Server)
+	Refactored for arena-driven participation.
+
+	The GameManager drives the round lifecycle. It no longer counts
+	server players directly -- it polls PlayerStateService for
+	ActiveParticipants and only starts rounds when the minimum
+	ActiveParticipant count is met.
+
+	The lifecycle is:
+	  Waiting → Intermission → Starting → Playing → RoundEnd → Waiting...
+
+	In Waiting, only ActiveParticipants matter. Lobby players,
+	Spectators, and Eliminated players are excluded from the count.
+]]
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -23,10 +38,12 @@ end
 function GameManager:Start()
 	BaseService.Start(self)
 
+	-- When a round ends, transition to Intermission.
 	EventManager:Connect(EventNames.RoundEnded, function()
 		self:SetState(GameStates.Intermission)
 	end)
 
+	-- Begin the lifecycle loop.
 	local selfAny = self :: any
 	selfAny._loopThread = task.spawn(function()
 		self:RunLifecycle()
@@ -46,7 +63,13 @@ end
 
 function GameManager:RunLifecycle()
 	while true do
-		if #Players:GetPlayers() >= GameConfig.Round.MinimumPlayers then
+		-- Only count ActiveParticipants. Lobby players, Spectators, and
+		-- Eliminated players are excluded from round start requirements.
+		local playerStateService = self.Services:Get("PlayerStateService")
+		local participantCount = playerStateService:GetActiveParticipantCount()
+
+		if participantCount >= GameConfig.Round.MinimumPlayers then
+			-- Enough ActiveParticipants: start the round sequence.
 			self:SetState(GameStates.Intermission)
 			task.wait(GameConfig.Round.IntermissionDurationSeconds)
 
@@ -56,15 +79,18 @@ function GameManager:RunLifecycle()
 			self:SetState(GameStates.Playing)
 			local started = self.Services:Get("RoundManager"):StartRound()
 			if not started then
+				-- Round failed to start (map missing, etc.). Return to Lobby.
 				self:SetState(GameStates.Lobby)
 			else
+				-- Wait for the round to finish.
 				while self.Services:Get("RoundManager"):IsActive() do
 					task.wait(1)
 				end
 			end
 		else
+			-- Not enough ActiveParticipants: stay in Lobby and wait.
 			self:SetState(GameStates.Lobby)
-			task.wait(5)
+			task.wait(2)
 		end
 	end
 end
