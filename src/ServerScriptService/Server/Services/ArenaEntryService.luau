@@ -3,37 +3,19 @@
 	ArenaEntryService (Server, Sensor)
 	Detects when players physically enter the arena from the lobby.
 
-	Design Decision: Zone-Based Polling with Touch Acceleration
-	----------------------------------------------------------
-	The PRIMARY detection mechanism is a server-side Heartbeat-based
-	polling loop that checks every Lobby player's character position
-	against the configured arena entry zone.
+	Uses a server-side Heartbeat-based proximity polling loop that
+	compares every Lobby player's HumanoidRootPart.Position against
+	the ArenaEntryZone bounding box (discovered from a workspace
+	Part/Model named "ArenaEntryZone", or from GameConfig.Arena
+	fallback bounds).
 
-	Why this approach over Part.Touched:
-	  * Touched events can fire multiple times, miss fast-moving
-	    characters, fire for non-character parts, or fail during
-	    character respawns.
-	  * A server-side polling loop is immune to client exploits
-	    because position is read from the server-authoritative
-	    character model.
-	  * Zone-based detection can use a configurable bounding region
-	    rather than depending on a specific part being in the
-	    workspace hierarchy.
+	Poll rate: ~10 Hz (every ~0.1 s). Detection is instant on the
+	first tick where the player is inside the zone. No confirmation
+	delay.
 
-	Touch events are used as an acceleration layer: they can trigger
-	an immediate re-check but the authoritative decision is always
-	made by the polling loop.
-
-	This service MUST:
-	  * Detect when a Lobby player's character enters the arena zone
-	  * Notify PlayerStateService to evaluate participation
-	  * Debounce per player to prevent multiple evaluations
-
-	This service MUST NOT:
-	  * Determine participation state directly
-	  * Control rounds
-	  * Assign winners
-	  * Spawn players
+	Why NOT Part.Touched:
+	  * Touched requires CanCollide = true on one of the parts,
+	    blocking player movement. A trigger zone must be pass-through.
 ]]
 
 local Players = game:GetService("Players")
@@ -50,31 +32,21 @@ local ArenaEntryService = {}
 ArenaEntryService.__index = ArenaEntryService
 setmetatable(ArenaEntryService, { __index = BaseService })
 
--- How many seconds must a player be continuously inside the arena zone
--- before we consider them "entered"? Prevents flicker from lag/bouncy physics.
-local ENTRY_CONFIRMATION_SECONDS = 0.3
-
--- How often (in seconds) do we poll all Lobby players' positions?
-local POLL_INTERVAL_SECONDS = 0.25
+local POLL_INTERVAL_SECONDS = 0.1
+local STARTUP_DELAY_SECONDS = 1.0
 
 -- ---------------------------------------------------------------------------
 -- Constructor
 -- ---------------------------------------------------------------------------
 
 function ArenaEntryService.new()
+	print("[ArenaEntry] Constructing ArenaEntryService")
 	local self: any = BaseService.new("ArenaEntryService")
-	-- _heartbeat: the RunService.Heartbeat connection for polling.
 	self._heartbeat = nil :: RBXScriptConnection?
-	-- _lastPollTime: tracks when we last ran the full poll.
 	self._lastPollTime = 0
-	-- _entryProgress: { [Player]: number } -- seconds the player has been
-	-- continuously detected inside the arena zone. Resets to 0 when they
-	-- leave. When it reaches ENTRY_CONFIRMATION_SECONDS, we fire the entry.
-	self._entryProgress = {} :: { [Player]: number }
-	-- _evaluatedPlayers: set of players who have already had their arena
-	-- entry evaluated. Prevents double-evaluation after state transition.
-	-- Cleared when state resets to Lobby.
 	self._evaluatedPlayers = {} :: { [Player]: boolean }
+	self._zoneRegion = nil :: { Min: Vector3, Max: Vector3 }?
+	self._zoneFound = false
 	return setmetatable(self, ArenaEntryService)
 end
 
@@ -83,91 +55,170 @@ end
 -- ---------------------------------------------------------------------------
 
 function ArenaEntryService:Start()
+	print("[ArenaEntry] Start() called")
 	BaseService.Start(self)
 
-	-- Listen for state changes to clean up internal tracking.
-	EventManager:Connect(EventNames.PlayerStateChanged, function(
-		player: Player,
-		newState: string,
-		_oldState: string?
-	)
-		self:_OnPlayerStateChanged(player, newState)
-	end)
+	local selfAny = self :: any
 
-	-- Fire the arena entry event so listeners (RoundService) can react.
-	-- We also listen to our own event for logging.
+	-- Subscribe to ArenaEntered for diagnostics (our own event, we log it).
 	EventManager:Connect(EventNames.ArenaEntered, function(player: Player)
+		print(`[ArenaEntry] EVENT CONSUMED: ArenaEntered for {player.Name}`)
 		local logging = self.Services:Get("LoggingService")
 		if logging then
 			logging:Info("ARENA", `{player.Name} entered the arena`)
 		end
 	end)
 
-	-- Begin the polling loop.
-	local selfAny = self :: any
-	selfAny._heartbeat = RunService.Heartbeat:Connect(function(deltaTime: number)
-		self:_OnHeartbeat(math.min(deltaTime, 0.5))
+	-- Listen for players returning to Lobby so they can re-enter.
+	EventManager:Connect(EventNames.PlayerStateChanged, function(
+		player: Player,
+		newState: string
+	)
+		print(`[ArenaEntry] State changed: {player.Name} -> {newState}`)
+		if newState == "Lobby" then
+			print(`[ArenaEntry] Clearing evaluated flag for {player.Name}`)
+			selfAny._evaluatedPlayers[player] = nil
+		end
 	end)
 
-	-- Also listen to the arena entry touch zone for acceleration.
-	self:_SetupTouchAcceleration()
+	-- Cache the zone region once at startup (it doesn't move).
+	selfAny._zoneFound = false
+	self:RefreshZone()
+
+	-- Defer the heartbeat connection so every downstream service
+	-- (especially RoundManager) has subscribed to ArenaEntered first.
+	print("[ArenaEntry] Scheduling heartbeat startup in 1 second...")
+	task.spawn(function()
+		task.wait(STARTUP_DELAY_SECONDS)
+		print("[ArenaEntry] Deferred startup: connecting heartbeat")
+
+		self:RefreshZone()
+		if not selfAny._zoneFound then
+			print("[ArenaEntry] WARNING: Still no ArenaEntryZone found after defer!")
+			print("[ArenaEntry] Searched in: ActiveMap, Workspace/Lobby, Workspace root")
+			print("[ArenaEntry] Falling back to GameConfig.Arena bounds")
+		end
+
+		selfAny._heartbeat = RunService.Heartbeat:Connect(function(deltaTime: number)
+			self:_OnHeartbeat(math.min(deltaTime or 0.016, 0.5))
+		end)
+	end)
 end
 
 -- ---------------------------------------------------------------------------
--- Touch Acceleration
+-- Zone Discovery
 -- ---------------------------------------------------------------------------
 
--- Attempts to wire up Touched events on the arena entry zone parts.
--- This is NOT the authoritative mechanism -- it simply triggers an
--- immediate re-check in the polling loop.
-function ArenaEntryService:_SetupTouchAcceleration()
-	local arenaEntryZone = self:_FindArenaEntryZone()
-	if not arenaEntryZone then
-		return
-	end
+function ArenaEntryService:RefreshZone()
+	print("[ArenaEntry] Refreshing zone region...")
+	local selfAny = self :: any
+	selfAny._zoneRegion = self:FindZoneRegion()
+	selfAny._zoneFound = selfAny._zoneRegion ~= nil
 
-	-- Collect all BaseParts in the entry zone folder/model.
-	local parts: { BasePart } = {}
-	if arenaEntryZone:IsA("BasePart") then
-		table.insert(parts, arenaEntryZone)
+	if selfAny._zoneFound then
+		local r = selfAny._zoneRegion
+		print(string.format("[ArenaEntry] Zone found: Min(%s) Max(%s)",
+			tostring(r.Min), tostring(r.Max)))
+	else
+		print("[ArenaEntry] Zone NOT found - will retry on heartbeat")
 	end
-	for _, child in ipairs(arenaEntryZone:GetDescendants()) do
-		if child:IsA("BasePart") then
-			table.insert(parts, child)
+end
+
+function ArenaEntryService:FindZoneRegion(): { Min: Vector3, Max: Vector3 }?
+	print("[ArenaEntry] Searching for ArenaEntryZone instance...")
+
+	-- 1. ActiveMap (arena map, only present during a round)
+	local activeMap = Workspace:FindFirstChild(GameConfig.Maps.ActiveMapParentName)
+	if activeMap then
+		print(`[ArenaEntry] Checking ActiveMap ({activeMap:GetFullName()})...`)
+		local zone = activeMap:FindFirstChild("ArenaEntryZone", true)
+		if zone then
+			print(`[ArenaEntry] Found in ActiveMap: {zone:GetFullName()} ({zone.ClassName})`)
+			return self:ComputeZoneBounds(zone)
 		end
 	end
 
-	for _, part in ipairs(parts) do
-		part.Touched:Connect(function(hit: BasePart)
-			self:_OnTouchAcceleration(hit)
-		end)
+	-- 2. Lobby map (persistent, cloned by MapManager on server start)
+	local lobby = Workspace:FindFirstChild("Lobby")
+	if lobby then
+		print(`[ArenaEntry] Checking Lobby ({lobby:GetFullName()})...`)
+		local zone = lobby:FindFirstChild("ArenaEntryZone", true)
+		if zone then
+			print(`[ArenaEntry] Found in Lobby: {zone:GetFullName()} ({zone.ClassName})`)
+			return self:ComputeZoneBounds(zone)
+		end
+	else
+		print("[ArenaEntry] No Lobby found in Workspace")
 	end
+
+	-- 3. Anywhere in Workspace
+	print("[ArenaEntry] Checking entire Workspace...")
+	local zone = Workspace:FindFirstChild("ArenaEntryZone", true)
+	if zone then
+		print(`[ArenaEntry] Found in Workspace: {zone:GetFullName()} ({zone.ClassName})`)
+		return self:ComputeZoneBounds(zone)
+	end
+
+	-- 4. Fallback to GameConfig.Arena
+	local cfg = GameConfig.Arena
+	if cfg and cfg.EntryZoneMin and cfg.EntryZoneMax then
+		print("[ArenaEntry] Using GameConfig.Arena fallback bounds")
+		return {
+			Min = cfg.EntryZoneMin,
+			Max = cfg.EntryZoneMax,
+		}
+	end
+
+	print("[ArenaEntry] No zone source available at all!")
+	return nil
 end
 
--- Called when any part touches the arena entry zone. We find the
--- player from the character model and force an immediate poll check.
-function ArenaEntryService:_OnTouchAcceleration(hit: BasePart)
-	-- Trace up to the character model.
-	local character = hit:FindFirstAncestorWhichIsA("Model")
-	if not character then
-		return
+function ArenaEntryService:ComputeZoneBounds(instance: Instance): { Min: Vector3, Max: Vector3 }?
+	local cframe: CFrame
+	local size: Vector3
+
+	if instance:IsA("BasePart") then
+		print(`[ArenaEntry] ComputeZoneBounds: BasePart, Size={instance.Size}, Position={instance.Position}`)
+		cframe = instance.CFrame
+		size = instance.Size
+	elseif instance:IsA("Model") then
+		-- For Models, use the bounding box (GetExtentsSize) and the
+		-- model's pivot (GetPivot). These give world-space values.
+		local extentsSize = instance:GetExtentsSize()
+		local pivot = instance:GetPivot()
+		print(`[ArenaEntry] ComputeZoneBounds: Model, ExtentsSize={extentsSize}, PivotPos={pivot.Position}`)
+
+		if extentsSize.Magnitude < 0.01 then
+			-- Model is empty or newly cloned without children loaded.
+			-- Try the primary part instead.
+			local primaryPart = instance.PrimaryPart
+			if primaryPart then
+				print(`[ArenaEntry] Model extents are zero, using PrimaryPart ({primaryPart.Size}, {primaryPart.Position})`)
+				cframe = primaryPart.CFrame
+				size = primaryPart.Size
+			else
+				print("[ArenaEntry] Model has zero extents and no PrimaryPart - cannot compute bounds")
+				return nil
+			end
+		else
+			cframe = pivot
+			size = extentsSize
+		end
+	else
+		print(`[ArenaEntry] Unsupported instance type: {instance.ClassName}`)
+		return nil
 	end
 
-	local player = Players:GetPlayerFromCharacter(character)
-	if not player then
-		return
+	if size.Magnitude < 0.01 then
+		print("[ArenaEntry] Zone size is zero - cannot compute bounds")
+		return nil
 	end
 
-	-- Only process Lobby players. The polling loop will do the
-	-- authoritative check.
-	local playerStateService = self.Services:Get("PlayerStateService")
-	local state = playerStateService:GetState(player)
-	if state ~= "Lobby" then
-		return
-	end
-
-	-- Force an immediate poll of this specific player.
-	self:_PollPlayerEntry(player, ENTRY_CONFIRMATION_SECONDS)
+	local halfSize = size / 2
+	local min = cframe.Position - halfSize
+	local max = cframe.Position + halfSize
+	print(string.format("[ArenaEntry] Computed zone: Min(%s) Max(%s)", tostring(min), tostring(max)))
+	return { Min = min, Max = max }
 end
 
 -- ---------------------------------------------------------------------------
@@ -178,54 +229,52 @@ function ArenaEntryService:_OnHeartbeat(deltaTime: number)
 	local selfAny = self :: any
 	selfAny._lastPollTime = selfAny._lastPollTime + deltaTime
 
-	-- Only run the full poll at the configured interval.
 	if selfAny._lastPollTime < POLL_INTERVAL_SECONDS then
 		return
 	end
 	selfAny._lastPollTime = 0
 
-	local playerStateService = self.Services:Get("PlayerStateService")
-
-	-- Poll every Lobby player.
-	local lobbyPlayers = playerStateService:GetLobbyPlayers()
-	for _, player in ipairs(lobbyPlayers) do
-		self:_PollPlayerEntry(player, deltaTime)
-	end
-
-	-- Clean up tracking for players who left.
-	for player, _ in pairs(selfAny._entryProgress) do
-		if not player.Parent then
-			selfAny._entryProgress[player] = nil
-			selfAny._evaluatedPlayers[player] = nil
+	-- If we don't have a zone yet, try refreshing (MapManager might have
+	-- loaded the lobby after our first attempt).
+	if not selfAny._zoneFound then
+		self:RefreshZone()
+		if not selfAny._zoneFound then
+			-- Still nothing — skip this poll cycle.
+			return
 		end
 	end
-end
 
--- Checks a single Lobby player to see if they have entered the arena.
--- Accumulates entry progress and fires ArenaEntered when confirmed.
-function ArenaEntryService:_PollPlayerEntry(player: Player, deltaTime: number)
-	local selfAny = self :: any
-
-	-- Skip players already evaluated (until their state resets to Lobby).
-	if selfAny._evaluatedPlayers[player] then
+	local stateService = self.Services:Get("PlayerStateService")
+	if not stateService then
+		print("[ArenaEntry] ERROR: PlayerStateService not available")
 		return
 	end
 
-	local isInArena = self:_IsPlayerCharacterInArenaZone(player)
+	local lobbyPlayers = stateService:GetLobbyPlayers()
+	if #lobbyPlayers > 0 then
+		-- Uncomment for verbose polling diagnostics:
+		-- print(`[ArenaEntry] Polling {#lobbyPlayers} Lobby players...`)
+	end
 
-	if isInArena then
-		local progress = (selfAny._entryProgress[player] or 0) + deltaTime
-		selfAny._entryProgress[player] = progress
+	for _, player in ipairs(lobbyPlayers) do
+		if selfAny._evaluatedPlayers[player] then
+			continue
+		end
 
-		if progress >= ENTRY_CONFIRMATION_SECONDS then
-			-- Confirmed entry! Mark as evaluated and fire the event.
+		local inZone: boolean
+		local ok = pcall(function()
+			inZone = self:_IsPlayerCharacterInArenaZone(player)
+		end)
+		if not ok then
+			print(`[ArenaEntry] ERROR in zone check for {player.Name}: {tostring(inZone)}`)
+			continue
+		end
+
+		if inZone then
+			print(`[ArenaEntry] DETECTED: {player.Name} is inside the zone`)
 			selfAny._evaluatedPlayers[player] = true
-			selfAny._entryProgress[player] = nil
 			EventManager:Fire(EventNames.ArenaEntered, player)
 		end
-	else
-		-- Player left the zone before confirmation: reset progress.
-		selfAny._entryProgress[player] = nil
 	end
 end
 
@@ -233,8 +282,6 @@ end
 -- Zone Detection
 -- ---------------------------------------------------------------------------
 
--- Returns true if the player's character root part is inside the
--- configured arena entry zone.
 function ArenaEntryService:_IsPlayerCharacterInArenaZone(player: Player): boolean
 	local character = player.Character
 	if not character then
@@ -246,102 +293,21 @@ function ArenaEntryService:_IsPlayerCharacterInArenaZone(player: Player): boolea
 		return false
 	end
 
-	local zone = self:_GetArenaZoneRegion()
+	local selfAny = self :: any
+	local zone = selfAny._zoneRegion
 	if not zone then
 		return false
 	end
 
 	local pos = root.Position
-	return pos.X >= zone.Min.X and pos.X <= zone.Max.X
-		and pos.Y >= zone.Min.Y and pos.Y <= zone.Max.Y
-		and pos.Z >= zone.Min.Z and pos.Z <= zone.Max.Z
-end
+	local inside = pos.X >= zone.Min.X
+		and pos.X <= zone.Max.X
+		and pos.Y >= zone.Min.Y
+		and pos.Y <= zone.Max.Y
+		and pos.Z >= zone.Min.Z
+		and pos.Z <= zone.Max.Z
 
--- Returns the arena zone bounding region. The primary source is the
--- ArenaEntryZone part/model in the active map or lobby. Falls back to
--- config-defined bounds.
-function ArenaEntryService:_GetArenaZoneRegion(): { Min: Vector3, Max: Vector3 }?
-	-- First try the ArenaEntryZone instance.
-	local entryZone = self:_FindArenaEntryZone()
-	if entryZone then
-		local cframe: CFrame
-		local size: Vector3
-
-		if entryZone:IsA("BasePart") then
-			cframe = entryZone.CFrame
-			size = entryZone.Size
-		else
-			local primaryPart = entryZone:FindFirstChildWhichIsA("BasePart")
-			if not primaryPart then
-				return nil
-			end
-			-- Use the model's bounding box as a rough approximation.
-			local modelSize = entryZone:GetExtentsSize()
-			cframe = entryZone:GetPivot()
-			size = modelSize
-		end
-
-		local halfSize = size / 2
-		return {
-			Min = cframe.Position - halfSize,
-			Max = cframe.Position + halfSize,
-		}
-	end
-
-	-- Fall back to config-defined zone.
-	local cfg = GameConfig.Arena
-	if not cfg or not cfg.EntryZoneMin or not cfg.EntryZoneMax then
-		return nil
-	end
-
-	return {
-		Min = cfg.EntryZoneMin,
-		Max = cfg.EntryZoneMax,
-	}
-end
-
--- Finds the ArenaEntryZone instance in the workspace. Looks in the
--- active map first, then in the lobby, then anywhere in workspace.
-function ArenaEntryService:_FindArenaEntryZone(): Instance?
-	-- Check the active map first.
-	local activeMap = Workspace:FindFirstChild(GameConfig.Maps.ActiveMapParentName)
-	if activeMap then
-		local zone = activeMap:FindFirstChild("ArenaEntryZone", true)
-		if zone and (zone:IsA("BasePart") or zone:IsA("Model")) then
-			return zone
-		end
-	end
-
-	-- Check the lobby.
-	local lobby = Workspace:FindFirstChild("Lobby")
-	if lobby then
-		local zone = lobby:FindFirstChild("ArenaEntryZone", true)
-		if zone and (zone:IsA("BasePart") or zone:IsA("Model")) then
-			return zone
-		end
-	end
-
-	-- Fallback: search entire workspace.
-	local zone = Workspace:FindFirstChild("ArenaEntryZone", true)
-	if zone and (zone:IsA("BasePart") or zone:IsA("Model")) then
-		return zone
-	end
-
-	return nil
-end
-
--- ---------------------------------------------------------------------------
--- State Change Handler
--- ---------------------------------------------------------------------------
-
--- Reset tracking when a player returns to Lobby so they can enter again.
-function ArenaEntryService:_OnPlayerStateChanged(player: Player, newState: string)
-	local selfAny = self :: any
-	if newState == "Lobby" then
-		-- Player is back in the lobby; they can enter the arena again.
-		selfAny._evaluatedPlayers[player] = nil
-		selfAny._entryProgress[player] = nil
-	end
+	return inside
 end
 
 return ArenaEntryService

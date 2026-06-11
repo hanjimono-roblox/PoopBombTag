@@ -12,19 +12,12 @@
       "style": "Normal",
       "weight": "Regular"
     },
-    "Position": [
-      [0.5, 0.0],
-      [0.4, 0.0]
-    ],
-    "Size": [
-      [0.0, 400.0],
-      [0.0, 80.0]
-    ],
+    "Position": [[0.8521, 0.0], [0.82, 0.0]],
+    "Size": [[0.0, 283.0], [0.0, 40.0]],
     "Text": "Waiting for players...",
     "TextColor3": [1, 1, 1],
     "TextScaled": true,
     "TextSize": 14,
-    "TextWrapped": true,
-    "Visible": true
+    "TextWrapped": true
   }
 }
