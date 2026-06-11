@@ -50,6 +50,7 @@ local BOMB_REPLICATION_NAME = "BombReplication"
 local ROUND_REPLICATION_NAME = "RoundReplication"
 local ANNOUNCEMENT_EVENT_NAME = "AnnouncementEvent"
 local PLAYER_ACTION_NAME = "PlayerAction"
+local MOVEMENT_ACTION_NAME = "MovementAction"
 
 function ReplicationService.new()
 	local self: any = BaseService.new("ReplicationService")
@@ -57,6 +58,7 @@ function ReplicationService.new()
 	self._roundRemote = nil :: RemoteEvent?
 	self._announcementRemote = nil :: RemoteEvent?
 	self._playerActionRemote = nil :: RemoteEvent?
+	self._movementActionRemote = nil :: RemoteEvent?
 	self._started = false
 	self._connectionCount = 0
 	return setmetatable(self, ReplicationService)
@@ -110,6 +112,14 @@ function ReplicationService:Start()
 		return
 	end
 	self._playerActionRemote = playerActionRemote
+
+	-- Resolve movement action remote (client -> server)
+	local movementActionRemote = remotes:FindFirstChild(MOVEMENT_ACTION_NAME)
+	if not movementActionRemote or not movementActionRemote:IsA("RemoteEvent") then
+		print("[Replication] error: MovementAction RemoteEvent missing")
+		return
+	end
+	self._movementActionRemote = movementActionRemote
 
 	-- ---- Bomb replication subscriptions ----
 
@@ -168,6 +178,26 @@ function ReplicationService:Start()
 			if roundManager then
 				roundManager:ReturnPlayerToLobby(player)
 			end
+		end
+	end)
+	self._connectionCount = self._connectionCount + 1
+
+	-- ---- Movement action listener (client -> server) ----
+
+	self._movementActionRemote.OnServerEvent:Connect(function(player: Player, action: string)
+		local movementService = self.Services:Get("MovementService")
+		if not movementService then
+			return
+		end
+
+		if action == "WallClimb" then
+			movementService:SetMovementMode(player, "WallGrip")
+		elseif action == "Default" then
+			movementService:SetMovementMode(player, "Default")
+		elseif action == "BeginSwing" then
+			movementService:SetMovementMode(player, "Swinging")
+		elseif action == "EndSwing" then
+			movementService:SetMovementMode(player, "Default")
 		end
 	end)
 	self._connectionCount = self._connectionCount + 1
