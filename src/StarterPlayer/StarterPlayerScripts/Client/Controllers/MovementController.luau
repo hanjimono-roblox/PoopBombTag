@@ -2,8 +2,7 @@
 
 -- MovementController (Client)
 -- Handles local-feel movement abilities: wall climbing, wall jumping,
--- and vine swinging. The server remains authoritative over movement
--- mode/state via MovementService.
+-- vine swinging, and double jumping via ExtraJumps attribute.
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -40,13 +39,12 @@ function MovementController.new()
 	self._activeSwing = nil :: RopeConstraint?
 	self._vineAttachment = nil :: CFrame?
 	self._movementActionRemote = nil :: RemoteEvent?
-	self._movementStateRemote = nil :: RemoteEvent?
+	self._getMovementStateRemote = nil :: RemoteFunction?
 	self._baseWalkSpeed = GameConfig.Movement.DefaultWalkSpeed
 	-- Double jump state
 	self._extraJumpsMax = 0
 	self._extraJumpsRemaining = 0
 	self._lastJumpTime = 0
-	self._statePulled = false
 	return setmetatable(self, MovementController)
 end
 
@@ -127,25 +125,59 @@ function MovementController:Start()
 
 	local remotes = ReplicatedStorage:WaitForChild("Remotes")
 	self._movementActionRemote = remotes:WaitForChild("MovementAction")
+	self._getMovementStateRemote = remotes:WaitForChild("GetMovementState")
 
-	-- Push listener: receives modifier updates from the server
-	self._movementStateRemote = remotes:WaitForChild("MovementStateReplication") :: RemoteEvent
-	self._movementStateRemote.OnClientEvent:Connect(function(state: any)
-		self._statePulled = true
-		self:_OnMovementStateUpdate(state)
-	end)
+	-- -----------------------------------------------------------------------
+	-- ExtraJumps: On startup, synchronously fetch the authoritative movement
+	-- state from the server via RemoteFunction. This eliminates the race
+	-- condition where the ExtraJumps attribute hasn't replicated yet.
+	-- The GetAttributeChangedSignal listener below handles mid-game changes
+	-- (e.g. purchasing ExtraJumps while in the arena).
+	-- -----------------------------------------------------------------------
+	local function fetchInitialMovementState()
+		local remote = self._getMovementStateRemote
+		if not remote then
+			return
+		end
+		local success, state = pcall(function()
+			return remote:InvokeServer()
+		end)
+		if success and state then
+			local extraJumps = state.Modifiers and state.Modifiers.ExtraJumps
+			if typeof(extraJumps) == "number" and extraJumps > 0 then
+				self:_SetExtraJumpsMax(extraJumps)
+			end
+		end
+	end
 
-	-- Attribute listener: this is the reliable source for client-side
-	-- active abilities. Server mirrors ExtraJumps onto the Player so
-	-- startup RemoteEvent timing cannot break double jump.
-	local function syncExtraJumpsFromAttribute()
+	-- Also fetch from attribute as a fallback for reliability
+	local function readExtraJumpsAttribute()
 		local value = localPlayer:GetAttribute("ExtraJumps")
-		if typeof(value) == "number" then
+		if typeof(value) == "number" and value > 0 then
 			self:_SetExtraJumpsMax(value)
 		end
 	end
-	localPlayer:GetAttributeChangedSignal("ExtraJumps"):Connect(syncExtraJumpsFromAttribute)
-	syncExtraJumpsFromAttribute()
+
+	-- Listen for attribute changes (e.g. mid-game purchases)
+	localPlayer:GetAttributeChangedSignal("ExtraJumps"):Connect(function()
+		readExtraJumpsAttribute()
+	end)
+
+	-- Fetch initial state on character spawn. The InvokeServer is synchronous
+	-- and will return the correct state because the server-side services
+	-- (ItemEffectService + PlayerManager) have finished initializing and
+	-- loaded the player's data by this point (DataLoaded has fired).
+	localPlayer.CharacterAdded:Connect(function()
+		task.defer(function()
+			fetchInitialMovementState()
+		end)
+	end)
+
+	-- Immediate fetch on script start (character may already exist)
+	task.defer(function()
+		fetchInitialMovementState()
+		readExtraJumpsAttribute()
+	end)
 
 	-- Spacebar → double jump. We do NOT check gameProcessed because
 	-- Roblox always marks Space as processed (even when airborne and
@@ -202,9 +234,8 @@ end
 function MovementController:_IsAirborne(humanoid: Humanoid): boolean
 	local state = humanoid:GetState()
 	-- ONLY Freefall and FallingDown count as airborne for double jump.
-	-- Jumping is excluded because the ground jump already consumes the
-	-- spacebar press in the same frame — calling ChangeState(Jumping)
-	-- while already Jumping is a no-op, wasting the double jump charge.
+	-- Jumping is excluded because the ground jump already fires on the
+	-- same Space press that triggers InputBegan.
 	return state == Enum.HumanoidStateType.Freefall
 		or state == Enum.HumanoidStateType.FallingDown
 end
@@ -378,12 +409,6 @@ end
 -- Double Jump
 -- ---------------------------------------------------------------------------
 
-function MovementController:_OnMovementStateUpdate(state: any)
-	local modifiers = state and state.Modifiers
-	if not modifiers then return end
-	self:_SetExtraJumpsMax(modifiers.ExtraJumps or 0)
-end
-
 function MovementController:_SetExtraJumpsMax(newMax: number)
 	if newMax > self._extraJumpsMax then
 		self._extraJumpsRemaining = newMax
@@ -404,8 +429,8 @@ function MovementController:_TryDoubleJump(humanoid: Humanoid)
 	self._extraJumpsRemaining = self._extraJumpsRemaining - 1
 	self._lastJumpTime = now
 
-	-- Apply upward velocity directly. ChangeState(Jumping) does not
-	-- produce vertical force when the Humanoid is already airborne.
+	-- Set upward velocity directly. Do NOT call ChangeState(Jumping)
+	-- because doing so while already airborne cancels the velocity.
 	local character = humanoid.Parent
 	if character and character:IsA("Model") then
 		local rootPart = character:FindFirstChild("HumanoidRootPart")
@@ -413,7 +438,6 @@ function MovementController:_TryDoubleJump(humanoid: Humanoid)
 			local vel = rootPart.AssemblyLinearVelocity
 			local jumpPower = humanoid.JumpPower or GameConfig.Movement.DefaultJumpPower or 70
 			rootPart.AssemblyLinearVelocity = Vector3.new(vel.X, jumpPower, vel.Z)
-			humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
 		end
 	end
 end

@@ -12,6 +12,9 @@
 	    upgrades, and PoopMagnet
 	  * ItemEquipped   → marks cosmetic ownership (visual effects handled client-side)
 	  * ItemUsed       → applies temporary consumable effects
+
+	This service is stateless: all passive modifiers are derived from
+	PlayerManager:GetState on every call. No cached per-player state.
 ]]
 
 local Players = game:GetService("Players")
@@ -28,14 +31,18 @@ setmetatable(ItemEffectService, { __index = BaseService })
 
 function ItemEffectService.new()
 	local self: any = BaseService.new("ItemEffectService")
-	-- Per-player cache of applied modifiers so we can recompute on
-	-- character respawn (characterAdded).
-	self._playerModifiers = {} :: { [Player]: { [string]: number } }
 	return setmetatable(self, ItemEffectService)
 end
 
 function ItemEffectService:Start()
 	BaseService.Start(self)
+
+	-- Also listen for DataLoaded in case character spawns before
+		-- player state is available (race condition).
+		EventManager:Connect(EventNames.DataLoaded, function(player: Player)
+    self:_ApplyMovementFromState(player)
+    self:_ApplyAllEquippedCosmetics(player)
+end)
 
 	-- Watch shop/inventory events
 	EventManager:Connect(EventNames.ItemPurchased, function(player: Player, itemId: string)
@@ -54,29 +61,48 @@ function ItemEffectService:Start()
 		self:_OnItemUsed(player, itemId)
 	end)
 
+	
+
 	-- Recompute ALL passive effects + apply cosmetics whenever a
 	-- character spawns. This handles returning players, first join,
 	-- and respawns.
 	Players.PlayerAdded:Connect(function(player: Player)
-		player.CharacterAdded:Connect(function(character: Model)
-			self:_RecomputeAllEffects(player)
+	local function apply()
+		task.delay(0.1, function()
+			self:_ApplyMovementFromState(player)
 			self:_ApplyAllEquippedCosmetics(player)
 		end)
+	end
 
-		-- Also listen for DataLoaded in case character spawns before
-		-- player state is available (race condition).
-		EventManager:Connect(EventNames.DataLoaded, function(loadedPlayer: Player)
-			if loadedPlayer ~= player then return end
-			self:_RecomputeAllEffects(player)
-			self:_ApplyAllEquippedCosmetics(player)
-		end)
-	end)
+	player.CharacterAdded:Connect(apply)
+
+	-- immediate apply if character already exists
+	if player.Character then
+		apply()
+	end
+end)
+
+	Players.PlayerRemoving:Connect(function(_player)
+end)
 
 	-- Handle players already in-game at the time this service starts
 	-- (e.g. hot-reload in Studio). Character may or may not exist yet.
 	for _, player in ipairs(Players:GetPlayers()) do
-		self:_RecomputeAllEffects(player)
-		self:_ApplyAllEquippedCosmetics(player)
+		local function apply()
+			task.delay(0.1, function()
+				self:_ApplyMovementFromState(player)
+				self:_ApplyAllEquippedCosmetics(player)
+			end)
+		end
+
+		player.CharacterAdded:Connect(apply)
+
+		local playerManager = self.Services:Get("PlayerManager")
+		local state = playerManager and playerManager:GetState(player)
+
+		if state and (next(state.OwnedItems) ~= nil or next(state.ItemLevels) ~= nil) then
+			apply()
+		end
 	end
 end
 
@@ -100,7 +126,7 @@ function ItemEffectService:_OnItemPurchased(player: Player, itemId: string)
 	local logging = self.Services:Get("LoggingService")
 
 	if category == "OneTime" or category == "Level" then
-		self:_ApplyPassiveEffects(player, itemId, itemDef, effects)
+		self:_ApplyMovementFromState(player)
 	elseif category == "Consumable" then
 		-- Consumable effects are applied when USED, not when purchased.
 		-- The only exception is consumable purchase itself — no instant effect.
@@ -111,125 +137,6 @@ function ItemEffectService:_OnItemPurchased(player: Player, itemId: string)
 	if logging then
 		logging:Info("EFFECTS", `Applied effects for {player.Name}: {itemId} ({category})`)
 	end
-end
-
-function ItemEffectService:_ApplyPassiveEffects(
-	player: Player,
-	itemId: string,
-	itemDef: any,
-	effects: { [string]: any }
-)
-	local catalog = self.Services:Get("CatalogService")
-	local category = itemDef.Category
-	local playerManager = self.Services:Get("PlayerManager")
-	local state = playerManager:GetState(player)
-	if not state then
-		return
-	end
-
-	-- Build modifier map from current inventory state
-	local modifiers: { [string]: number } = {}
-
-	-- ---- Level items: multiply by current level ----
-	if category == "Level" then
-		local level = state.ItemLevels[itemId] or 1
-
-		if effects.SpeedMultiplier then
-			-- SpeedBoost: base = 1.0, each level adds SpeedMultiplier%
-			-- level 1 = 1.04x, level 5 = 1.20x
-			modifiers.Speed = 1.0 + effects.SpeedMultiplier * level
-		end
-
-		if effects.JumpMultiplier then
-			-- JumpPower: base = 1.0, each level adds JumpMultiplier%
-			modifiers.Jump = 1.0 + effects.JumpMultiplier * level
-		end
-
-		if effects.RangeMultiplier then
-			-- TagRange: base = 1.0, each level adds RangeMultiplier%
-			modifiers.TagRange = 1.0 + effects.RangeMultiplier * level
-		end
-
-		if effects.ExtraFuseSeconds then
-			modifiers.ExtraFuseSeconds = effects.ExtraFuseSeconds * level
-		end
-
-		if effects.ExtraShieldSeconds then
-			modifiers.ExtraShieldSeconds = effects.ExtraShieldSeconds * level
-		end
-	end
-
-	-- ---- OneTime items: binary on/off ----
-	if category == "OneTime" then
-		if effects.ExtraJumps then
-			modifiers.ExtraJumps = effects.ExtraJumps
-		end
-
-		if effects.WallGripDuration then
-			modifiers.WallGrip = effects.WallGripDuration
-		end
-
-		if effects.MagnetRadius then
-			modifiers.MagnetRadius = effects.MagnetRadius
-		end
-
-		if effects.DashDistance then
-			modifiers.DashDistance = effects.DashDistance
-			modifiers.DashCooldown = effects.DashCooldown or 5.0
-		end
-
-		if effects.BonusPoopPerRound then
-			modifiers.BonusPoopPerRound = effects.BonusPoopPerRound
-		end
-	end
-
-	-- ---- Also account for Level items already owned ----
-	for otherItemId, level in state.ItemLevels do
-		if level > 0 and otherItemId ~= itemId then
-			local otherItemDef = catalog:GetItem(otherItemId)
-			if otherItemDef and otherItemDef.Effects then
-				local eff = otherItemDef.Effects
-				if eff.SpeedMultiplier then
-					modifiers.Speed = (modifiers.Speed or 1.0) + eff.SpeedMultiplier * level
-				end
-				if eff.JumpMultiplier then
-					modifiers.Jump = (modifiers.Jump or 1.0) + eff.JumpMultiplier * level
-				end
-			end
-		end
-	end
-
-	-- ---- Account for OneTime items already owned ----
-	for otherItemId, _ in state.OwnedItems do
-		if otherItemId ~= itemId then
-			local otherItemDef = catalog:GetItem(otherItemId)
-			if otherItemDef and otherItemDef.Category == "OneTime" and otherItemDef.Effects then
-				local eff = otherItemDef.Effects
-				if eff.ExtraJumps and not modifiers.ExtraJumps then
-					modifiers.ExtraJumps = eff.ExtraJumps
-				end
-				if eff.WallGripDuration and not modifiers.WallGrip then
-					modifiers.WallGrip = eff.WallGripDuration
-				end
-				if eff.MagnetRadius and not modifiers.MagnetRadius then
-					modifiers.MagnetRadius = eff.MagnetRadius
-				end
-				if eff.DashDistance and not modifiers.DashDistance then
-					modifiers.DashDistance = eff.DashDistance
-					modifiers.DashCooldown = eff.DashCooldown or 5.0
-				end
-				if eff.BonusPoopPerRound and not modifiers.BonusPoopPerRound then
-					modifiers.BonusPoopPerRound = eff.BonusPoopPerRound
-				end
-			end
-		end
-	end
-
-	-- Cache for character respawn reapplication
-	self._playerModifiers[player] = modifiers
-
-	-- Apply to MovementService
-	self:_PushToMovementService(player, modifiers)
 end
 
 -- ---------------------------------------------------------------------------
@@ -285,15 +192,17 @@ function ItemEffectService:_OnItemUsed(player: Player, itemId: string)
 
 	-- Apply temporary modifier
 	local movementService = self.Services:Get("MovementService")
-	local baseModifiers = self._playerModifiers[player] or {}
+	local baseModifiers = self:_ComputeModifiers(player)
 
 	-- Combine temporary with permanent
-	for key, value in tempModifiers do
-		local base = baseModifiers[key] or 1.0
-		movementService:SetMovementModifier(player, {
-			[key] = base * value
-		})
-	end
+	local combined = table.clone(baseModifiers)
+
+for key, value in pairs(tempModifiers) do
+	local base = combined[key] or 1.0
+	combined[key] = base * value
+end
+
+movementService:SetMovementModifier(player, combined)
 
 	-- Schedule removal
 	task.delay(duration, function()
@@ -301,7 +210,7 @@ function ItemEffectService:_OnItemUsed(player: Player, itemId: string)
 			return
 		end
 		-- Revert to permanent modifiers only
-		self:_PushToMovementService(player, baseModifiers)
+		self:_ApplyMovementFromState(player)
 	end)
 
 	if logging then
@@ -387,6 +296,7 @@ end
 
 function ItemEffectService:_PushToMovementService(player: Player, modifiers: { [string]: number })
 	local movementService = self.Services:Get("MovementService")
+if not movementService then return end
 
 	-- Build a MovementModifier from our modifier map
 	local movementModifier: { [string]: number } = {}
@@ -447,22 +357,24 @@ function ItemEffectService:_PushToMovementService(player: Player, modifiers: { [
 end
 
 -- ---------------------------------------------------------------------------
--- Recompute all passive effects from a player's entire inventory.
--- Called on DataLoaded and for already-in-game players on startup.
+-- Compute all passive modifiers from PlayerManager state.
+-- This is the ONLY function that knows how item effects translate to
+-- modifier values. It is deterministic: given the same state, it always
+-- returns the same result.
 -- ---------------------------------------------------------------------------
 
-function ItemEffectService:_RecomputeAllEffects(player: Player)
+function ItemEffectService:_ComputeModifiers(player: Player): { [string]: number }
 	local catalog = self.Services:Get("CatalogService")
 	local playerManager = self.Services:Get("PlayerManager")
 	local state = playerManager:GetState(player)
 	if not state then
-		return
+		return {}
 	end
 
 	local modifiers: { [string]: number } = {}
 
 	-- Level items
-	for itemId, level in state.ItemLevels do
+	for itemId, level in pairs(state.ItemLevels) do
 		if level > 0 then
 			local itemDef = catalog:GetItem(itemId)
 			if itemDef and itemDef.Effects then
@@ -487,7 +399,7 @@ function ItemEffectService:_RecomputeAllEffects(player: Player)
 	end
 
 	-- OneTime items
-	for itemId, _ in state.OwnedItems do
+	for itemId, _ in pairs(state.OwnedItems) do
 		local itemDef = catalog:GetItem(itemId)
 		if itemDef and itemDef.Category == "OneTime" and itemDef.Effects then
 			local eff = itemDef.Effects
@@ -510,20 +422,16 @@ function ItemEffectService:_RecomputeAllEffects(player: Player)
 		end
 	end
 
-	self._playerModifiers[player] = modifiers
-	self:_PushToMovementService(player, modifiers)
+	return modifiers
 end
 
 -- ---------------------------------------------------------------------------
--- Reapply on character respawn
+-- Apply computed modifiers to MovementService and Humanoid.
+-- This is the canonical entry point for applying passive movement effects.
 -- ---------------------------------------------------------------------------
 
-function ItemEffectService:_ApplyMovementModifiers(player: Player)
-	local modifiers = self._playerModifiers[player]
-	if not modifiers or next(modifiers) == nil then
-		return
-	end
-	self:_PushToMovementService(player, modifiers)
+function ItemEffectService:_ApplyMovementFromState(player: Player)
+	self:_PushToMovementService(player, self:_ComputeModifiers(player))
 end
 
 -- ---------------------------------------------------------------------------
@@ -570,7 +478,7 @@ function ItemEffectService:_ApplyAllEquippedCosmetics(player: Player)
 		return
 	end
 
-	for slot, itemId in state.EquippedItems do
+	for slot, itemId in pairs(state.EquippedItems) do
 		local itemDef = catalog:GetItem(itemId)
 		if itemDef then
 			self:_ApplyCosmeticEffect(player, character, itemDef, slot)
@@ -613,30 +521,9 @@ end
 
 -- Removes the cosmetic object(s) for a given slot from the character.
 function ItemEffectService:_RemoveCosmeticEffect(character: Model, slot: string)
-	-- Trail objects are tagged with a CosmeticSlot attribute
-	for _, child in ipairs(character:GetChildren()) do
-		if child:GetAttribute("CosmeticSlot") == slot then
-			child:Destroy()
-		end
-	end
-
-	-- Also clean up from HumanoidRootPart children (trails may be there)
-	local rootPart = character:FindFirstChild("HumanoidRootPart")
-	if rootPart then
-		for _, child in ipairs(rootPart:GetChildren()) do
-			if child:GetAttribute("CosmeticSlot") == slot then
-				child:Destroy()
-			end
-		end
-	end
-
-	-- Clean up hat attachments
-	local head = character:FindFirstChild("Head")
-	if head then
-		for _, child in ipairs(head:GetChildren()) do
-			if child:GetAttribute("CosmeticSlot") == slot then
-				child:Destroy()
-			end
+	for _, d in ipairs(character:GetDescendants()) do
+		if d:GetAttribute("CosmeticSlot") == slot then
+			d:Destroy()
 		end
 	end
 end

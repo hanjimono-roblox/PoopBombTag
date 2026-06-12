@@ -24,6 +24,7 @@
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local TableUtil = require(ReplicatedStorage.Shared.Utility.TableUtil)
 
 local BaseService = require(script.Parent.Parent.Framework.BaseService)
 local EventManager = require(ReplicatedStorage.Shared.EventManager)
@@ -160,6 +161,11 @@ function PlayerManager:_RetryLoadOrKick(player: Player)
 				selfAny._states[player] = state
 				self:EnsureLeaderstats(player, state)
 				EventManager:Fire(EventNames.PlayerStateChanged, player, state)
+				-- Fire DataLoaded so services like ItemEffectService that
+				-- subscribe to DataLoaded can recompute effects. The initial
+				-- DataLoaded may have been missed if ItemEffectService hadn't
+				-- started yet when the first DataLoaded was fired.
+				EventManager:Fire(EventNames.DataLoaded, player, state)
 
 				-- Spawn in lobby on successful retry.
 				task.delay(0.5, function()
