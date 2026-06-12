@@ -1,19 +1,26 @@
 --!strict
 
--- BombController (Client)
--- Renders the bomb on the local screen in response to server-side
--- authoritative events from BombManager.  Nothing here is authoritative --
--- it is purely cosmetic / feedback.  The actual game state, including
--- who holds the bomb and when it explodes, is owned by the server.
+-- BombController (Client, Cosmetic Only)
+-- Observes server-authoritative bomb state and provides cosmetic
+-- feedback (timer UI, transfer/explosion SFX/VFX).
 --
--- The controller is responsible for:
---   * Spawning a 3D "bomb" attachment on the current holder's character
---     (or clearing it when the round resets).
---   * Playing a ticking SFX that speeds up as the timer runs out.
---   * Driving the bomb timer ScreenGui so players can see how much time
---     is left on the fuse.
---   * Playing a quick "transfer" VFX/SFX when the bomb changes hands.
---   * Playing an explosion VFX/SFX when the bomb detonates.
+-- This controller does NOT:
+--   * Clone bombs (server does this via BombAttachmentService)
+--   * Weld bombs (server does this via WeldConstraint)
+--   * Position bombs (server does PivotTo)
+--   * Destroy bombs (server destroys via DetachBomb)
+--   * Track bomb model state (server owns the model replication)
+--
+-- The bomb model itself is replicated to all clients automatically
+-- by Roblox's instance replication because it is parented to the
+-- character on the server. Every client sees the EXACT SAME bomb
+-- instance and weld.
+--
+-- Responsibilities:
+--   * Drive the bomb timer ScreenGui so players can see remaining fuse
+--   * Play transfer VFX/SFX when the bomb changes hands
+--   * Play explosion VFX/SFX when the bomb detonates
+--   * Play a ticking SFX sourced from the replicated bomb model
 
 local Players = game:GetService("Players")
 local ReplicatedFirst = game:GetService("ReplicatedFirst")
@@ -34,8 +41,7 @@ setmetatable(BombController, { __index = BaseController })
 -- Tuning constants for the visual/audio presentation.  Kept local to the
 -- controller so designers can tweak the feel without touching game config.
 -- ---------------------------------------------------------------------------
-local BOMB_MODEL_NAME = "PoopBombModel"        -- cloned onto the holder's character
-local BOMB_ATTACH_OFFSET = CFrame.new(0, -0.25, -0.6) *	CFrame.Angles(math.rad(-90), math.rad(90), 0)
+local BOMB_MODEL_NAME = "PoopBombModel"        -- name of the server-replicated bomb model
 local TRANSFER_VFX_NAME = "BombTransferVFX"    -- a ParticleEmitter parent created in ReplicatedFirst
 local EXPLOSION_VFX_NAME = "BombExplosionVFX"  -- a ParticleEmitter parent created in ReplicatedFirst
 
@@ -57,10 +63,9 @@ function BombController.new()
 	-- _currentHolder tracks the player we *believe* currently has the bomb.
 	-- The server is the source of truth; we just mirror the latest event.
 	self._currentHolder = nil :: Player?
-	-- _bombAttachment is the model welded to the current holder's character.
-	self._bombAttachment = nil :: Model?
-	-- _tickSound is the looping tick audio so we can tweak PlaybackRate
-	-- dynamically as the fuse burns down.
+	-- _tickSound is the looping tick audio found on the replicated bomb model.
+	-- Retrieved each render step from the character's bomb (server-replicated).
+	-- NOT owned by this controller; we reference it, not create it.
 	self._tickSound = nil :: Sound?
 	-- _timerEndTime mirrors the server's _timerEndTime so the client can
 	-- render a smooth countdown even between server events.
@@ -124,12 +129,9 @@ end
 -- ---------------------------------------------------------------------------
 
 function BombController:OnBombAssigned(holder: Player, durationSeconds: number)
-	-- If for some reason we are still rendering on the previous holder
-	-- (e.g. the assignment was a forced re-roll from EliminatePlayer),
-	-- clear those visuals before attaching to the new holder.
-	if self._currentHolder and self._currentHolder ~= holder then
-		self:_DestroyBombAttachment()
-	end
+	-- The bomb model is already being replicated server-side by
+	-- BombAttachmentService. We do NOT create or weld anything here.
+	-- This handler only manages the timer UI and tick sound.
 
 	self._currentHolder = holder
 
@@ -137,17 +139,12 @@ function BombController:OnBombAssigned(holder: Player, durationSeconds: number)
 	-- matches the authoritative countdown even if we joined late.
 	self._timerEndTime = TimeUtil.Now() + durationSeconds
 
-	self:EnsureBombVisuals()
+	self:RefreshTickSound()
 	self:StartRenderLoop()
 	self:_UpdateTimerLabel(durationSeconds)
 end
 
 function BombController:OnBombTransferred(fromPlayer: Player, toPlayer: Player, durationSeconds: number)
-	-- Destroy the old attachment first so the idempotent guard in
-	-- EnsureBombVisuals does not bail out with the bomb still
-	-- parented to the previous holder's character.
-	self:_DestroyBombAttachment()
-
 	-- Always play the transfer feedback so spectators also see/hear it.
 	self:_PlayTransferEffect(fromPlayer, toPlayer)
 
@@ -155,7 +152,9 @@ function BombController:OnBombTransferred(fromPlayer: Player, toPlayer: Player, 
 	-- for the new holder (matching the pattern in OnBombAssigned).
 	self._currentHolder = toPlayer
 	self._timerEndTime = TimeUtil.Now() + durationSeconds
-	self:EnsureBombVisuals()
+
+	-- Re-find the tick sound on the new holder's replicated bomb model.
+	self:RefreshTickSound()
 	self:StartRenderLoop()
 	self:_UpdateTimerLabel(durationSeconds)
 end
@@ -167,23 +166,21 @@ function BombController:OnBombExploded(holder: Player)
 end
 
 -- ---------------------------------------------------------------------------
--- 3D bomb attachment (model welded to the holder's character)
+-- Tick sound management (sourced from server-replicated bomb model)
 -- ---------------------------------------------------------------------------
 
-function BombController:EnsureBombVisuals()
+-- RefreshTickSound() looks up the server-replicated bomb model on the
+-- current holder's character and retrieves (or creates) the ticking sound.
+-- The bomb model itself is replicated by Roblox; we only interact with
+-- its Sound child for audio feedback.
+function BombController:RefreshTickSound()
+	local selfAny = self :: any
+
+	-- Stop any previous tick sound reference
+	selfAny._tickSound = nil
+
 	local holder = self._currentHolder
-
 	if not holder or not holder.Parent then
-		self:_DestroyBombAttachment()
-		return
-	end
-
-	if self._bombAttachment and self._bombAttachment.Parent then
-		return
-	end
-
-	local sourceTemplate = ReplicatedStorage:FindFirstChild(BOMB_MODEL_NAME)
-	if not sourceTemplate or not sourceTemplate:IsA("Model") then
 		return
 	end
 
@@ -192,81 +189,16 @@ function BombController:EnsureBombVisuals()
 		return
 	end
 
-	local handPart = character:FindFirstChild("RightHand")
-	if not handPart or not handPart:IsA("BasePart") then
-		warn("RightHand not found")
+	-- Find the server-replicated bomb model on the character
+	local bomb = character:FindFirstChild(BOMB_MODEL_NAME)
+	if not bomb or not bomb:IsA("Model") then
+		-- Bomb model has not replicated yet; it's fine, we'll
+		-- try again on the next render step.
 		return
 	end
 
-	----------------------------------------------------------------
-	-- Clone bomb
-	----------------------------------------------------------------
-
-	local bomb = sourceTemplate:Clone()
-	bomb.Parent = character
-
-	if not bomb.PrimaryPart then
-		local firstPart = bomb:FindFirstChildWhichIsA("BasePart", true)
-
-		if not firstPart then
-			warn("Bomb contains no BaseParts")
-			bomb:Destroy()
-			return
-		end
-
-		bomb.PrimaryPart = firstPart
-	end
-
-	----------------------------------------------------------------
-	-- Physics setup
-	----------------------------------------------------------------
-
-	for _, obj in ipairs(bomb:GetDescendants()) do
-		if obj:IsA("BasePart") then
-			obj.Anchored = false
-			obj.CanCollide = false
-			obj.CanTouch = false
-			obj.CanQuery = false
-			obj.Massless = true
-		end
-	end
-
-	----------------------------------------------------------------
-	-- Position bomb FIRST
-	----------------------------------------------------------------
-
-	bomb:PivotTo(handPart.CFrame * BOMB_ATTACH_OFFSET)
-
-	----------------------------------------------------------------
-	-- Weld every bomb part to PrimaryPart
-	----------------------------------------------------------------
-
-	for _, obj in ipairs(bomb:GetDescendants()) do
-		if obj:IsA("BasePart") and obj ~= bomb.PrimaryPart then
-			local wc = Instance.new("WeldConstraint")
-			wc.Part0 = bomb.PrimaryPart
-			wc.Part1 = obj
-			wc.Parent = obj
-		end
-	end
-
-	----------------------------------------------------------------
-	-- Weld bomb to hand
-	----------------------------------------------------------------
-
-	local handWeld = Instance.new("WeldConstraint")
-	handWeld.Part0 = handPart
-	handWeld.Part1 = bomb.PrimaryPart
-	handWeld.Parent = bomb.PrimaryPart
-
-	self._bombAttachment = bomb
-
-	----------------------------------------------------------------
-	-- Tick sound
-	----------------------------------------------------------------
-
+	-- Locate or create the tick sound on the replicated bomb
 	local tickSound = bomb:FindFirstChild(TICK_SOUND_NAME)
-
 	if not tickSound or not tickSound:IsA("Sound") then
 		tickSound = Instance.new("Sound")
 		tickSound.Name = TICK_SOUND_NAME
@@ -277,24 +209,17 @@ function BombController:EnsureBombVisuals()
 	end
 
 	tickSound:Play()
-	self._tickSound = tickSound
+	selfAny._tickSound = tickSound
 end
 
-function BombController:_DestroyBombAttachment()
-	if self._tickSound then
-		self._tickSound:Stop()
-		self._tickSound = nil
-	end
-	if self._bombAttachment then
-		self._bombAttachment:Destroy()
-		self._bombAttachment = nil
-	end
-end
+-- ---------------------------------------------------------------------------
+-- Visual state management
+-- ---------------------------------------------------------------------------
 
 function BombController:ClearBombVisuals()
 	self._currentHolder = nil
 	self._timerEndTime = 0
-	self:_DestroyBombAttachment()
+	self._tickSound = nil
 	self:_StopRenderLoop()
 	self:_SetTimerLabelVisible(false)
 end
@@ -326,9 +251,10 @@ function BombController:_StopRenderLoop()
 end
 
 function BombController:OnRenderStep()
-	-- Keep the bomb attached in case the character respawned mid-round
-	-- (we'd lose the weld and the bomb would fall out of the world).
-	self:EnsureBombVisuals()
+	-- Look up the tick sound on the replicated bomb. The bomb model
+	-- is replicated by the server; we just find it and play the tick.
+	-- If the bomb model hasn't replicated yet, RefreshTickSound is a no-op.
+	self:RefreshTickSound()
 
 	local remaining = self._timerEndTime > 0 and TimeUtil.SecondsRemaining(self._timerEndTime) or 0
 	self:_UpdateTimerLabel(remaining)
@@ -416,6 +342,8 @@ function BombController:_UpdateTimerLabel(remainingSeconds: number)
 	local uiController = self.Controllers and self.Controllers:Get("UIController")
 	-- UIController may not exist yet; treat its absence as "no theme".
 	local _ = uiController -- reserved for future shared theme lookups
+
+	local seconds = math.max(0, remainingSeconds)
 
 	if seconds <= COUNTDOWN_RED_THRESHOLD then
 		label.TextColor3 = Color3.fromRGB(255, 80, 80)
@@ -554,12 +482,13 @@ end
 -- manually torn down if it is ever created outside the registry (e.g.
 -- in tests).  The Maid handles releasing every RBX object + connection.
 function BombController:Destroy()
+	self._tickSound = nil
+	self:_StopRenderLoop()
+
 	local maid = self._maid :: any
 	if maid and type(maid.DoCleaning) == "function" then
 		maid:DoCleaning()
 	end
-	self:_StopRenderLoop()
-	self:_DestroyBombAttachment()
 end
 
 return BombController

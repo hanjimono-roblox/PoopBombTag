@@ -58,6 +58,9 @@ function BombManager.new()
 	-- been called (including defensive rejections). Used to
 	-- identify re-entrancy.
 	self._executeTransferCalls = 0
+	-- Flag to prevent re-entrant bomb attachment calls
+	-- during cleanup/detach chains.
+	self._isHandlingAttachment = false
 	return setmetatable(self, BombManager)
 end
 
@@ -82,6 +85,11 @@ function BombManager:AssignBomb(player: Player): boolean
 		player,
 		GameConfig.Bomb.DurationSeconds
 	)
+
+	-- Attach the bomb model to the player's character server-side.
+	-- This ensures all clients see the exact same bomb instance and
+	-- weld. Attachment is idempotent internally.
+	self.Services:Get("BombAttachmentService"):AttachBomb(player)
 
 	-- Seed the resolver's rising-edge state for the new
 	-- holder. This is a direct in-process call between two
@@ -183,6 +191,12 @@ function BombManager:ExecuteTransfer(fromPlayer: Player, toPlayer: Player): bool
 	selfAny._holder = toPlayer
 	self:ResetTimer()
 
+	-- Transfer the bomb model from the old holder to the new holder.
+	-- Detach is idempotent; Attach is idempotent. This ensures the
+	-- server-authoritative bomb instance follows the holder.
+	self.Services:Get("BombAttachmentService"):DetachBomb(fromPlayer)
+	self.Services:Get("BombAttachmentService"):AttachBomb(toPlayer)
+
 	-- INTERNAL event only. ReplicationService is the sole
 	-- consumer that translates this into a RemoteEvent payload
 	-- for clients. It must NEVER call back into gameplay
@@ -223,6 +237,12 @@ function BombManager:ExplodeBomb(): boolean
 	selfAny._holder = nil
 	selfAny._timerThread = nil
 
+	-- Detach the bomb model from the exploded player. The bomb no
+	-- longer exists in the world; the visual destruction is handled
+	-- by the client's explosion effect. This must happen before the
+	-- holder reference is cleared for any downstream cleanup.
+	self.Services:Get("BombAttachmentService"):DetachBomb(holder)
+
 	-- Clear the resolver's rising-edge state for the holder
 	-- that just ceased to be the bomb holder. There is no
 	-- successor holder in this path (the round either ends
@@ -257,11 +277,11 @@ function BombManager:ClearBomb()
 	selfAny._timerEndTime = 0
 	selfAny._timerThread = nil
 
-	-- Clear the resolver's rising-edge state for the holder
-	-- that just ceased to be the bomb holder. There is no
-	-- successor holder in this path (the round has ended);
-	-- any subsequent round will re-seed via AssignBomb.
+	-- Detach the bomb model from the previous holder. The round has
+	-- ended, so the bomb visual should be removed from all clients.
+	-- Idempotent internally.
 	if previousHolder then
+		self.Services:Get("BombAttachmentService"):DetachBomb(previousHolder)
 		self.Services:Get("InteractionService"):ClearPreviousContacts(previousHolder)
 	end
 end
