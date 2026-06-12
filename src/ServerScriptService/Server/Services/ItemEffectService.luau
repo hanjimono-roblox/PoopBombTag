@@ -641,51 +641,162 @@ end
 -- ---------------------------------------------------------------------------
 -- Pet Cosmetic (ShadowPet)
 -- ---------------------------------------------------------------------------
+local RunService = game:GetService("RunService")
 
-function ItemEffectService:_SpawnPet(player: Player, character: Model, itemDef: any, effects: { [string]: any })
-	local petScale = effects.PetScale or 1.0
-
+function ItemEffectService:_SpawnPet(
+	player: Player,
+	character: Model,
+	itemDef: any,
+	effects: { [string]: any }
+)
 	local rootPart = character:FindFirstChild("HumanoidRootPart")
 	if not rootPart or not rootPart:IsA("BasePart") then
 		return
 	end
 
-	local petPart = Instance.new("Part")
-	petPart.Name = `Pet_{itemDef.Id}`
-	petPart:SetAttribute("CosmeticSlot", "Pet")
-	petPart.Size = Vector3.new(1.5, 1.5, 1.5) * petScale
-	petPart.Color = Color3.fromRGB(80, 20, 120) -- dark purple, visible
-	petPart.Anchored = false
-	petPart.CanCollide = false
-	petPart.Massless = true
-	petPart.Transparency = 0.2
-	petPart.Parent = character
+	local petScale = effects.PetScale or 1
 
-	-- Glow effect to make the pet noticeable
+	-- =========================
+	-- MODEL SETUP
+	-- =========================
+	local petModel = Instance.new("Model")
+	petModel.Name = `Pet_{itemDef.Id}`
+	petModel:SetAttribute("CosmeticSlot", "Pet")
+	petModel.Parent = character
+
+	local core = Instance.new("Part")
+	core.Shape = Enum.PartType.Ball
+	core.Size = Vector3.new(1.2, 1.0, 1.4) * petScale
+	core.Material = Enum.Material.SmoothPlastic
+	core.Color = Color3.fromRGB(10, 10, 10)
+	core.Transparency = 0.25
+	core.Anchored = true
+	core.CanCollide = false
+	core.CanTouch = false
+	core.CanQuery = false
+	core.Parent = petModel
+
+	local aura = Instance.new("Part")
+	aura.Shape = Enum.PartType.Ball
+	aura.Size = core.Size * 1.6
+	aura.Material = Enum.Material.Neon
+	aura.Color = Color3.fromRGB(120, 40, 180)
+	aura.Transparency = 0.75
+	aura.Anchored = true
+	aura.CanCollide = false
+	aura.CanTouch = false
+	aura.CanQuery = false
+	aura.Parent = petModel
+
 	local highlight = Instance.new("Highlight")
 	highlight.Name = "PetHighlight"
-	highlight:SetAttribute("CosmeticSlot", "Pet")
-	highlight.FillColor = Color3.fromRGB(80, 20, 120)
+	highlight.FillColor = Color3.fromRGB(25, 0, 45)
 	highlight.OutlineColor = Color3.fromRGB(180, 80, 255)
-	highlight.FillTransparency = 0.5
-	highlight.OutlineTransparency = 0.3
-	highlight.Parent = petPart
+	highlight.FillTransparency = 0.6
+	highlight.OutlineTransparency = 0.2
+	highlight.Parent = petModel
 
-	-- Simple follow behavior
-	task.spawn(function()
-		while petPart and petPart.Parent do
-			if not player or not player.Parent then break end
-			local char = player.Character
-			if char ~= character then break end -- new character, cleanup
-			local rp = char and char:FindFirstChild("HumanoidRootPart")
-			if rp and rp:IsA("BasePart") then
-				petPart.CFrame = rp.CFrame * CFrame.new(-3, -1, -3)
-			end
-			task.wait(0.08)
+	-- =========================
+	-- STATE
+	-- =========================
+	local elapsed = 0
+	local baseCoreSize = core.Size
+
+	local followOffset = Vector3.new(-3, -1, -3)
+
+	local followSpeed = 9
+	local idleOrbitSpeed = 1.2
+
+	local lastRootPos = rootPart.Position
+	local isMoving = false
+
+	local connection
+
+	-- =========================
+	-- CLEANUP
+	-- =========================
+	local function cleanup()
+		if connection then
+			connection:Disconnect()
+			connection = nil
 		end
-		-- Cleanup: destroy pet if player left or character changed
-		if petPart and petPart.Parent then
-			petPart:Destroy()
+
+		if petModel and petModel.Parent then
+			petModel:Destroy()
+		end
+	end
+
+	petModel.Destroying:Connect(cleanup)
+
+	-- =========================
+	-- LOOP
+	-- =========================
+	connection = RunService.Heartbeat:Connect(function(dt)
+		if not player.Parent then
+			cleanup()
+			return
+		end
+
+		if player.Character ~= character then
+			cleanup()
+			return
+		end
+
+		if not rootPart.Parent then
+			cleanup()
+			return
+		end
+
+		elapsed += dt
+
+		-- movement detection
+		local moveDelta = (rootPart.Position - lastRootPos).Magnitude
+		lastRootPos = rootPart.Position
+		isMoving = moveDelta > 0.05
+
+		-- wobble
+		local wobble = CFrame.new(
+			math.sin(elapsed * 2.2) * 0.2,
+			math.sin(elapsed * 3.0) * 0.25,
+			math.cos(elapsed * 2.6) * 0.2
+		)
+
+		-- orbit
+		local orbit = CFrame.Angles(
+			0,
+			elapsed * (isMoving and 0.5 or idleOrbitSpeed),
+			0
+		)
+
+		-- BASE POSITION
+		local baseCF = rootPart.CFrame * CFrame.new(followOffset)
+
+		-- FIXED CONDITIONAL (Lua-safe)
+		local targetCF
+		if isMoving then
+			targetCF = baseCF * wobble
+		else
+			targetCF = baseCF * orbit * wobble
+		end
+
+		-- smooth follow
+		local alpha = 1 - math.exp(-followSpeed * dt)
+
+		core.CFrame = core.CFrame:Lerp(targetCF, alpha)
+		aura.CFrame = aura.CFrame:Lerp(targetCF, alpha * 0.55)
+
+		-- pulse
+		local pulse = (math.sin(elapsed * 2.6) + 1) * 0.5
+
+		core.Transparency = 0.25 + pulse * 0.15
+		aura.Transparency = 0.72 + pulse * 0.18
+
+		core.Size = baseCoreSize * (1 + pulse * 0.035)
+		aura.Size = core.Size * (1.6 + pulse * 0.06)
+
+		if highlight.Parent then
+			highlight.FillTransparency = 0.55 + pulse * 0.25
+			highlight.OutlineTransparency = 0.15 + pulse * 0.2
 		end
 	end)
 end
