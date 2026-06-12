@@ -42,4 +42,9 @@ return table.freeze({
 	ShopClosed = "ShopClosed",
 	CatalogReplicated = "CatalogReplicated",
 	InventoryUpdated = "InventoryUpdated",
+
+	-- Coin pickup system
+	CoinCollected = "CoinCollected",
+	CoinSpawned = "CoinSpawned",
+	CoinDespawned = "CoinDespawned",
 })

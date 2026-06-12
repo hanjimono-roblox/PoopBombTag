@@ -25,6 +25,7 @@ local serviceModules = {
 	"InteractionService",
 	"ReplicationService",
 	"TagDetectionService",
+	"CoinPickupService",
 	"RoundManager",
 	"GameManager",
 	"ShopService",

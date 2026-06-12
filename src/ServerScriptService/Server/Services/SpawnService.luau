@@ -130,7 +130,7 @@ function SpawnService:DistributeParticipantsInArena(players: { Player })
 
 	for index, player in ipairs(players) do
 		local spawnPoint = arenaSpawns[((index - 1) % #arenaSpawns) + 1]
-		self:_TeleportPlayer(player, spawnPoint.CFrame + Vector3.new(0, 3, 0))
+		self:_TeleportPlayer(player, spawnPoint)
 	end
 end
 
@@ -217,6 +217,7 @@ function SpawnService:_GetArenaSpawnPoints(): { CFrame }
 		local spawnFolder = activeMap:FindFirstChild(GameConfig.Maps.RoundSpawnFolderName, true)
 		if spawnFolder then
 			for _, part in ipairs(self:_CollectBaseParts(spawnFolder)) do
+				print("SPAWN PART!!!!!!!!!!", part)
 				table.insert(spawns, part.CFrame + Vector3.new(0, 3, 0))
 			end
 		end

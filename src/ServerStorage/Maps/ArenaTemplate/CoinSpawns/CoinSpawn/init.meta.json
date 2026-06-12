@@ -1,0 +1,13 @@
+{
+  "className": "Part",
+  "properties": {
+    "Attributes": {
+      "CoinRespawnTime": 10,
+      "CoinSpawn": true,
+      "CoinValue": 50
+    },
+    "BottomSurface": "Smooth",
+    "Size": [4, 1, 2],
+    "TopSurface": "Smooth"
+  }
+}

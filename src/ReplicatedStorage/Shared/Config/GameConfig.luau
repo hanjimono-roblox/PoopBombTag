@@ -59,7 +59,18 @@ local GameConfig = {
     Data = {
         StoreName = "PoopBombTag_PlayerData_v1",
         AutosaveIntervalSeconds = 120
-    }
+    },
+
+    Coins = {
+        DefaultValue = 10,
+        DefaultRespawnTime = 15,
+        MaxActiveOnField = 5,
+        CoinPartName = "PoopCoin",
+        CoinColor = Color3.fromRGB(255, 215, 0),
+        CoinSize = Vector3.new(2, 2, 1),
+        CollectRadius = 4.0,
+        RespawnVariance = 0.3,
+    },
 }
 
 return GameConfig
