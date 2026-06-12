@@ -18,9 +18,19 @@ local MovementController = {}
 MovementController.__index = MovementController
 setmetatable(MovementController, { __index = BaseController })
 
-local WALL_CLIMB_DISTANCE = 5.0
-local WALL_CLIMB_VELOCITY = 30.0
-local WALL_JUMP_FORCE = 50.0
+-- ---------------------------------------------------------------------------
+-- Tuning Constants
+-- ---------------------------------------------------------------------------
+
+local WALL_CLIMB_DISTANCE = 5.0           -- Raycast range for wall detection
+local WALL_CLIMB_VELOCITY = 35            -- Upward drift while climbing (original value)
+local WALL_CLIMB_HORIZONTAL_SPEED = 12    -- Lateral movement while climbing (original value)
+local WALL_CLIMB_WALL_PUSH = 4            -- Force toward wall during climb
+local WALL_JUMP_OUTWARD_FORCE = 30        -- Initial outward push away from wall
+local WALL_JUMP_UPWARD_FORCE = 40         -- Upward jump strength
+local WALL_JUMP_MAINTAIN_OUTWARD = 18     -- Per-frame outward velocity maintained during arc
+local WALL_JUMP_LOCKOUT = 0.28            -- Lockout before reattach — gives arc time to develop
+local WALL_REATTACH_DISTANCE = 7.0        -- Distance threshold for wall re-grab
 local RAYCAST_INTERVAL = 1
 local VINE_GRAB_DISTANCE = 6.0
 local VINE_SWING_FORCE = 30.0
@@ -41,6 +51,10 @@ function MovementController.new()
 	self._movementActionRemote = nil :: RemoteEvent?
 	self._getMovementStateRemote = nil :: RemoteFunction?
 	self._baseWalkSpeed = GameConfig.Movement.DefaultWalkSpeed
+	-- Wall jump arc state
+	self._wallJumping = false
+	self._savedWallNormal = nil :: Vector3?
+	self._savedWallPosition = nil :: Vector3?
 	-- Double jump state
 	self._extraJumpsMax = 0
 	self._extraJumpsRemaining = 0
@@ -216,6 +230,10 @@ function MovementController:OnPhysicsStep()
 	local rootPart = character:FindFirstChild("HumanoidRootPart")
 	if not humanoid or not rootPart or not rootPart:IsA("BasePart") then return end
 	self:_DetectAndClimb(rootPart, humanoid)
+	if self._wallJumping then
+		self:_MaintainWallJumpArc(rootPart)
+		self:_TryReattach(rootPart, humanoid)
+	end
 	if self._activeSwing then self:_ApplySwingPhysics(rootPart) end
 	self._frameCount = self._frameCount + 1
 end
@@ -261,8 +279,11 @@ function MovementController:_DetectAndClimb(rootPart: BasePart, humanoid: Humano
 	end
 	local airborne = self:_IsAirborne(humanoid)
 	local wallJumpLocked = time() < self._wallJumpLockoutUntil
-	local shouldClimb = not wallJumpLocked and nearWall and climbable and airborne
-		and UserInputService:IsKeyDown(Enum.KeyCode.Space)
+	-- CRITICAL: While wall jumping, do not re-engage the climb.
+	-- Only _TryReattach is allowed to restart climbing after a wall jump.
+	-- This prevents the climb heartbeat from killing the jump arc.
+	local shouldClimb = not wallJumpLocked and not self._wallJumping and nearWall
+		and climbable and airborne and UserInputService:IsKeyDown(Enum.KeyCode.Space)
 	if not self._wallClimbing then shouldClimb = shouldClimb and pushingIntoWall end
 	if shouldClimb then
 		self._wallNormal = hitNormal
@@ -276,16 +297,17 @@ end
 function MovementController:_StartWallClimb(rootPart: BasePart, humanoid: Humanoid)
 	if self._wallClimbing then return end
 	self._wallClimbing = true
+	self._wallJumping = false
 	humanoid:ChangeState(Enum.HumanoidStateType.Freefall)
 	self._climbConnection = RunService.Heartbeat:Connect(function()
 		if not self._wallClimbing then return end
 		local wallPush = Vector3.zero
-		if self._wallNormal then wallPush = -self._wallNormal * 4 end
+		if self._wallNormal then wallPush = -self._wallNormal * WALL_CLIMB_WALL_PUSH end
 		local moveDir = humanoid.MoveDirection
 		rootPart.AssemblyLinearVelocity = Vector3.new(
-			moveDir.X * 12 + wallPush.X,
+			moveDir.X * WALL_CLIMB_HORIZONTAL_SPEED + wallPush.X,
 			math.max(rootPart.AssemblyLinearVelocity.Y, WALL_CLIMB_VELOCITY),
-			moveDir.Z * 12 + wallPush.Z)
+			moveDir.Z * WALL_CLIMB_HORIZONTAL_SPEED + wallPush.Z)
 	end)
 	self:_FireMovementAction("WallClimb")
 end
@@ -293,6 +315,7 @@ end
 function MovementController:_EndWallClimb()
 	if not self._wallClimbing then return end
 	self._wallClimbing = false
+	self._wallJumping = false
 	if self._climbConnection then self._climbConnection:Disconnect(); self._climbConnection = nil end
 	self._wallNormal = nil; self._wallPosition = nil
 	local character = self:GetCharacter()
@@ -318,7 +341,7 @@ function MovementController:_DetectWall(rootPart: BasePart, humanoid: Humanoid):
 end
 
 -- ---------------------------------------------------------------------------
--- Wall Jump
+-- Wall Jump — Creates a visible arc away from and back toward the wall
 -- ---------------------------------------------------------------------------
 
 function MovementController:HandleWallJump()
@@ -329,11 +352,83 @@ function MovementController:HandleWallJump()
 	if not rootPart or not rootPart:IsA("BasePart") then return end
 	local wallNormal = self._wallNormal
 	if not wallNormal then return end
+
+	-- Save wall info before ending climb so we can reattach after the arc
+	self._savedWallNormal = self._wallNormal
+	self._savedWallPosition = self._wallPosition
+
 	self._lastWallJump = time()
-	self._wallJumpLockoutUntil = time() + 0.25
+	self._wallJumpLockoutUntil = time() + WALL_JUMP_LOCKOUT
 	self:_EndWallClimb()
-	local currentVelocity = rootPart.AssemblyLinearVelocity
-	rootPart.AssemblyLinearVelocity = currentVelocity + wallNormal * WALL_JUMP_FORCE + Vector3.new(0, WALL_JUMP_FORCE * 0.9, 0)
+
+	-- Enter wall jump arc state
+	self._wallJumping = true
+
+	-- Apply the jump impulse.
+	-- WALL_JUMP_OUTWARD_FORCE is deliberately small so the player stays
+	-- close enough to reattach after gravity pulls them back down.
+	local jumpVelocity = wallNormal * WALL_JUMP_OUTWARD_FORCE + Vector3.new(0, WALL_JUMP_UPWARD_FORCE, 0)
+
+	-- Preserve existing horizontal momentum but let the wall-normal
+	-- component be overridden so we always push away from the wall.
+	local vel = rootPart.AssemblyLinearVelocity
+	rootPart.AssemblyLinearVelocity = Vector3.new(vel.X, 0, vel.Z) + jumpVelocity
+end
+
+-- ---------------------------------------------------------------------------
+-- Wall Reattach & Arc Maintenance
+-- ---------------------------------------------------------------------------
+
+-- Maintains outward velocity during the wall jump arc so the player
+-- doesn't get pushed back into the wall by the Humanoid's air control
+-- (which applies WalkSpeed toward the wall when the player holds W).
+function MovementController:_MaintainWallJumpArc(rootPart: BasePart)
+	local wallNormal = self._savedWallNormal
+	if not wallNormal then return end
+	local vel = rootPart.AssemblyLinearVelocity
+	local currentOutward = vel:Dot(wallNormal)
+	-- If the player's air control has reduced outward velocity below
+	-- the target, re-apply it. This ensures the arc is visible even
+	-- when the player holds W toward the wall.
+	if currentOutward < WALL_JUMP_MAINTAIN_OUTWARD then
+		local deficit = WALL_JUMP_MAINTAIN_OUTWARD - currentOutward
+		rootPart.AssemblyLinearVelocity = vel + (wallNormal * deficit)
+	end
+end
+
+function MovementController:_TryReattach(rootPart: BasePart, humanoid: Humanoid)
+	-- Only applies during a wall-jump arc
+	if not self._wallJumping then return end
+	-- Don't reattach during the initial lockout window
+	if time() <= self._wallJumpLockoutUntil then return end
+	-- Don't reattach if climb already re-engaged via _DetectAndClimb
+	if self._wallClimbing then self._wallJumping = false; return end
+
+	local wallNormal = self._savedWallNormal
+	local wallPos = self._savedWallPosition
+	if not wallNormal or not wallPos then return end
+
+	local currentPos = rootPart.Position
+	local vel = rootPart.AssemblyLinearVelocity
+
+	-- Perpendicular distance from the wall surface (positive = away)
+	local distToWall = (currentPos - wallPos):Dot(wallNormal)
+
+	-- Only reattach when the player is falling back down AND close enough
+	-- to the wall. This ensures the arc visually completes before re-grab.
+	local falling = vel.Y < 0
+	local closeEnough = distToWall < WALL_REATTACH_DISTANCE
+
+	if falling and closeEnough then
+		-- Cancel the remaining outward velocity so the player doesn't
+		-- drift away from the wall after reattach.
+		local outwardComponent = math.clamp(vel:Dot(wallNormal), 0, math.huge) * wallNormal
+		rootPart.AssemblyLinearVelocity = vel - outwardComponent
+
+		-- Re-grab the wall
+		self._wallJumping = false
+		self:_StartWallClimb(rootPart, humanoid)
+	end
 end
 
 -- ---------------------------------------------------------------------------
