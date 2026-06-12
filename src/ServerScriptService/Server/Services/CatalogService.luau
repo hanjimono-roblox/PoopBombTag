@@ -74,12 +74,17 @@ function CatalogService:GetCatalog(): { [string]: ItemDefinition }
 end
 
 -- Returns a safe-to-replicate copy of the catalog.
+-- IMPORTANT: PriceRobux and ProductId are STRIPPED so the server
+-- remains the single source of truth for Robux pricing.
 function CatalogService:GetCatalogForReplication(): { [string]: ItemDefinition }
-	-- Deep copy to prevent mutation by clients via the replication path.
 	local copy: { [string]: ItemDefinition } = {}
 	for id, def in self._items do
 		local defCopy: ItemDefinition = table.clone(def)
 		defCopy.Effects = table.clone(def.Effects)
+		-- Strip Robux pricing fields — server authoritatively provides
+		-- Robux prices through ShopService's RobuxPrices table.
+		defCopy.PriceRobux = nil
+		defCopy.ProductId = nil
 		copy[id] = defCopy
 	end
 	return copy

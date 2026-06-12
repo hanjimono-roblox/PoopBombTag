@@ -121,11 +121,6 @@ function StoreManager:_OnProcessReceipt(receiptInfo: ReceiptInfo): Enum.ProductP
 		return Enum.ProductPurchaseDecision.NotProcessedYet
 	end
 
-	-- Validate receipt
-	if receiptInfo.PurchaseType ~= Enum.PurchaseType.ProductPurchase then
-		return Enum.ProductPurchaseDecision.NotProcessedYet
-	end
-
 	-- Look up the Player object
 	local player = Players:GetPlayerByUserId(playerId)
 	if not player then

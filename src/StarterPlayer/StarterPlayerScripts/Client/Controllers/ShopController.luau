@@ -51,6 +51,8 @@ function ShopController.new()
 	local self: any = BaseController.new("ShopController")
 	self._isOpen = false
 	self._catalog = {} :: { [string]: any }
+	-- Server-authoritative Robux pricing data: ItemId → { price: number, productId: number }
+	self._robuxPrices = {} :: { [string]: { price: number, productId: number } }
 	self._inventory = {
 		OwnedItems = {},
 		EquippedItems = {},
@@ -159,16 +161,18 @@ function ShopController:_FindProximityPrompt()
 
 		-- Open shop when player walks into range
 		prompt.PromptShown:Connect(function()
+			print("prompt shown")
 			self:_OpenShop()
 		end)
-
+		
 		-- Close shop when player walks away
 		prompt.PromptHidden:Connect(function()
 			self:_CloseShop()
 		end)
-
+		
 		-- Open shop when player presses E (in case PromptShown didn't trigger)
 		prompt.Triggered:Connect(function()
+			print("prompt shown2")
 			self:_OpenShop()
 		end)
 	end
@@ -211,10 +215,12 @@ end
 -- ---------------------------------------------------------------------------
 
 function ShopController:_OnInventoryUpdate(data: { [string]: any })
-	-- Full catalog bundle
+	-- Full catalog bundle (from GetCatalog response)
 	if data.Catalog ~= nil then
 		self._catalog = data.Catalog or {}
 		self._categories = data.Categories or CATEGORY_ORDER
+		-- Store server-authoritative Robux pricing
+		self._robuxPrices = data.RobuxPrices or {}
 		if data.Inventory then
 			local inv = data.Inventory
 			self._inventory.OwnedItems = inv.OwnedItems or {}
@@ -226,6 +232,10 @@ function ShopController:_OnInventoryUpdate(data: { [string]: any })
 		if self._isOpen then
 			self:_RenderShop()
 		end
+		-- Forward inventory data to InventoryController for hotbar.
+		-- Unwrap the catalog bundle so the inner Inventory (with top-level
+		-- ConsumableCounts/EquippedItems) reaches the InventoryController.
+		self:_NotifyInventoryController(data.Inventory)
 		return
 	end
 
@@ -238,6 +248,18 @@ function ShopController:_OnInventoryUpdate(data: { [string]: any })
 
 	if self._isOpen then
 		self:_RenderShop()
+	end
+	-- Forward inventory data to InventoryController for hotbar
+	self:_NotifyInventoryController(data)
+end
+
+-- Forwards inventory state changes to the InventoryController so the
+-- consumable hotbar and equip slot UI stay in sync.
+function ShopController:_NotifyInventoryController(data: { [string]: any })
+	local inventoryController = self.Controllers:Get("InventoryController")
+	if not inventoryController then return end
+	if type(inventoryController.UpdateInventory) == "function" then
+		inventoryController:UpdateInventory(data)
 	end
 end
 
@@ -313,10 +335,15 @@ function ShopController:_FetchCatalog()
 		self._catalog = result.Catalog or {}
 		self._inventory = result.Inventory or self._inventory
 		self._categories = result.Categories or CATEGORY_ORDER
+		self._robuxPrices = result.RobuxPrices or {}
 		local itemCount = 0
 		for _ in pairs(self._catalog :: any) do itemCount += 1 end
-		print("[ShopController] Catalog received:", itemCount, "items, categories:", #self._categories)
+		local robuxItemCount = 0
+		for _ in pairs(self._robuxPrices) do robuxItemCount += 1 end
+		print("[ShopController] Catalog received:", itemCount, "items, categories:", #self._categories, "robuxItems:", robuxItemCount)
 
+		-- Forward initial inventory to InventoryController for hotbar
+		self:_NotifyInventoryController(self._inventory)
 
 	else
 		warn("[ShopController] GetCatalog returned nil")
@@ -420,10 +447,15 @@ function ShopController:_RenderItemGrid()
 		priceLabel.Size = UDim2.fromOffset(130, 20)
 		priceLabel.Position = UDim2.fromOffset(5, 142)
 		priceLabel.BackgroundTransparency = 1
+		-- Poop price comes from the catalog; Robux price comes from
+		-- the server-authoritative _robuxPrices table.
 		if itemDef.PricePoop then
 			priceLabel.Text = `💩 {itemDef.PricePoop}`
-		elseif itemDef.PriceRobux then
-			priceLabel.Text = `💰 {itemDef.PriceRobux}`
+		else
+			local robuxData = self._robuxPrices[itemDef.Id]
+			if robuxData and robuxData.price then
+				priceLabel.Text = `💰 {robuxData.price}`
+			end
 		end
 		priceLabel.TextColor3 = Color3.fromRGB(255, 220, 100)
 		priceLabel.TextScaled = true
@@ -521,11 +553,13 @@ function ShopController:_RenderDetail(itemId: string)
 
 	local robuxButton = panel:FindFirstChild("ItemPriceRobux", true)
 	if robuxButton and robuxButton:IsA("TextButton") then
-		if itemDef.PriceRobux and not self:_IsItemMaxed(itemDef) then
+		-- Use server-authoritative Robux pricing data
+		local robuxData = self._robuxPrices[itemId]
+		if robuxData and robuxData.price and not self:_IsItemMaxed(itemDef) then
 			robuxButton.Visible = true
-			robuxButton.Text = `Buy {itemDef.PriceRobux} Robux`
+			robuxButton.Text = `Buy {robuxData.price} Robux`
 			robuxButton.MouseButton1Click:Connect(function()
-				self:_OnPurchaseItem(itemDef.Id, "Robux")
+				self:_OnPurchaseItem(itemId, "Robux")
 			end)
 		else
 			robuxButton.Visible = false
@@ -612,12 +646,10 @@ end
 function ShopController:_OnPurchaseItem(itemId: string, currency: string)
 	if currency == "Poop" then
 		local purchaseRequestFn = GetRemote("PurchaseRequest") :: RemoteFunction
-		local ok, results = pcall(function()
+		local ok, success, errorMessage = pcall(function()
 			return purchaseRequestFn:InvokeServer(itemId)
 		end)
 		if ok then
-			local success = results[1]
-			local errorMessage = results[2]
 			if success then
 				self:_ShowFeedback("Purchase successful!", Color3.fromRGB(100, 255, 100))
 			else
@@ -625,9 +657,10 @@ function ShopController:_OnPurchaseItem(itemId: string, currency: string)
 			end
 		end
 	elseif currency == "Robux" then
-		local itemDef = self._catalog[itemId]
-		if itemDef and itemDef.ProductId and itemDef.ProductId > 0 then
-			MarketplaceService:PromptProductPurchase(Players.LocalPlayer, itemDef.ProductId)
+		-- Use server-authoritative ProductId from _robuxPrices
+		local robuxData = self._robuxPrices[itemId]
+		if robuxData and robuxData.productId and robuxData.productId > 0 then
+			MarketplaceService:PromptProductPurchase(Players.LocalPlayer, robuxData.productId)
 		else
 			self:_ShowFeedback("Robux not configured", Color3.fromRGB(255, 200, 100))
 		end
@@ -636,24 +669,22 @@ end
 
 function ShopController:_OnEquipItem(itemId: string, slot: string)
 	local equipItemFn = GetRemote("EquipItem") :: RemoteFunction
-	local ok, results = pcall(function()
+	local ok, success, errorMessage = pcall(function()
 		return equipItemFn:InvokeServer(itemId, slot)
 	end)
 	if ok then
-		local success = results[1]
 		if not success then
-			self:_ShowFeedback(results[2] or "Failed to equip", Color3.fromRGB(255, 100, 100))
+			self:_ShowFeedback(errorMessage or "Failed to equip", Color3.fromRGB(255, 100, 100))
 		end
 	end
 end
 
 function ShopController:_OnUnequipItem(slot: string)
 	local unequipItemFn = GetRemote("UnequipItem") :: RemoteFunction
-	local ok, results = pcall(function()
+	local ok, success, errorMessage = pcall(function()
 		return unequipItemFn:InvokeServer(slot)
 	end)
 	if ok then
-		local success = results[1]
 		if not success then
 			self:_ShowFeedback("Failed to unequip", Color3.fromRGB(255, 100, 100))
 		end
@@ -662,11 +693,10 @@ end
 
 function ShopController:_OnUseConsumable(itemId: string)
 	local useConsumableFn = GetRemote("UseConsumable") :: RemoteFunction
-	local ok, results = pcall(function()
+	local ok, success, _errorMessage = pcall(function()
 		return useConsumableFn:InvokeServer(itemId)
 	end)
 	if ok then
-		local success = results[1]
 		if not success then
 			self:_ShowFeedback("Failed to use", Color3.fromRGB(255, 100, 100))
 		end

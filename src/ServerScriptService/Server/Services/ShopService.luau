@@ -13,8 +13,11 @@
 ]]
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Players = game:GetService("Players")
 
 local BaseService = require(script.Parent.Parent.Framework.BaseService)
+local EventManager = require(ReplicatedStorage.Shared.EventManager)
+local EventNames = require(ReplicatedStorage.Shared.Constants.EventNames)
 local GameConfig = require(ReplicatedStorage.Shared.Config.GameConfig)
 
 local ShopService = {}
@@ -28,6 +31,19 @@ end
 function ShopService:Start()
 	BaseService.Start(self)
 	self:_SetupRemotes()
+
+	-- Push initial inventory to clients when their data loads.
+	-- We use a small delay so the client has time to load its
+	-- InventoryController script and connect its OnClientEvent.
+	EventManager:Connect(EventNames.DataLoaded, function(player: Player)
+		task.wait(1)
+		self:_PushInventoryUpdate(player)
+	end)
+	-- Also push for already-loaded players (e.g. hot-reload in Studio)
+	task.wait(2)
+	for _, player in ipairs(Players:GetPlayers()) do
+		self:_PushInventoryUpdate(player)
+	end
 end
 
 -- ---------------------------------------------------------------------------
@@ -67,6 +83,12 @@ function ShopService:_SetupRemotes()
 	useConsumable.OnServerInvoke = function(player: Player, itemId: string): (boolean, any)
 		return self:_OnUseConsumableRequest(player, itemId)
 	end
+
+	-- GetInventory: Client pulls current inventory (RemoteFunction)
+	local getInventory = shopEvents:WaitForChild("GetInventory") :: RemoteFunction
+	getInventory.OnServerInvoke = function(player: Player)
+		return self:_GetInventoryData(player)
+	end
 end
 
 -- ---------------------------------------------------------------------------
@@ -77,8 +99,10 @@ function ShopService:_SendCatalog(player: Player): { [string]: any }
 	local catalogService = self.Services:Get("CatalogService")
 	if not catalogService then
 		warn("[ShopService/_SendCatalog] CatalogService not available")
-		return { Catalog = {}, Inventory = {}, Categories = {} }
+		return { Catalog = {}, Inventory = {}, Categories = {}, RobuxPrices = {} }
 	end
+	-- Use the full (non-replicated) catalog for server-side pricing data
+	local fullCatalog = catalogService:GetCatalog()
 	local catalog = catalogService:GetCatalogForReplication()
 	local catalogCount = 0
 	for _ in pairs(catalog :: any) do catalogCount += 1 end
@@ -96,10 +120,43 @@ function ShopService:_SendCatalog(player: Player): { [string]: any }
 		Poop = (state and state.Poop) or 0,
 	}
 
+	-- Build RobuxPrices table: ItemId → { price, productId }
+	-- The server is the single source of truth for Robux pricing.
+	local robuxPrices: { [string]: { price: number, productId: number } } = {}
+	for itemId, itemDef in fullCatalog do
+		if itemDef.PriceRobux and itemDef.PriceRobux > 0 and itemDef.ProductId and itemDef.ProductId > 0 then
+			robuxPrices[itemId] = {
+				price = itemDef.PriceRobux,
+				productId = itemDef.ProductId,
+			}
+		end
+	end
+
 	return {
 		Catalog = catalog,
 		Inventory = inventoryData,
 		Categories = catalogService:GetCategories(),
+		RobuxPrices = robuxPrices,
+	}
+end
+
+-- ---------------------------------------------------------------------------
+-- Inventory Query
+-- ---------------------------------------------------------------------------
+
+function ShopService:_GetInventoryData(player: Player): { [string]: any }
+	local inventoryManager = self.Services:Get("InventoryManager")
+	local playerManager = self.Services:Get("PlayerManager")
+	local state = playerManager:GetState(player)
+	local catalogService = self.Services:Get("CatalogService")
+
+	return {
+		OwnedItems = inventoryManager:GetOwnedItems(player),
+		EquippedItems = inventoryManager:GetEquippedItems(player),
+		ItemLevels = (state and state.ItemLevels) or {},
+		ConsumableCounts = (state and state.ConsumableCounts) or {},
+		Poop = (state and state.Poop) or 0,
+		Catalog = catalogService and catalogService:GetCatalogForReplication() or {},
 	}
 end
 

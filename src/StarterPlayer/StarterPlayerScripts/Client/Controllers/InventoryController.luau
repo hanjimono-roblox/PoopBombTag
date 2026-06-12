@@ -28,6 +28,7 @@ function InventoryController.new()
 		ConsumableCounts = {},
 		EquippedItems = {},
 	}
+	self._catalog = {} :: { [string]: any } -- itemId → itemDef for icon lookup
 	return setmetatable(self, InventoryController)
 end
 
@@ -40,6 +41,31 @@ function InventoryController:Start()
 
 	self:_ResolveGUI()
 	self:_SetupBindings()
+	self:_ListenForUpdates()
+end
+
+-- Listens for server InventoryUpdate events AND pulls initial inventory
+-- state. The pull ensures data arrives even if the server fired before
+-- we connected our listener (eliminates timing race conditions).
+function InventoryController:_ListenForUpdates()
+	local remotes = ReplicatedStorage:WaitForChild("Remotes")
+	local shopEvents = remotes:WaitForChild("ShopEvents")
+	local inventoryUpdate = shopEvents:WaitForChild("InventoryUpdate") :: RemoteEvent
+	inventoryUpdate.OnClientEvent:Connect(function(data: { [string]: any })
+		self:UpdateInventory(data)
+	end)
+
+	-- Pull current inventory from server after listener is connected.
+	-- This guarantees we get data regardless of push timing.
+	task.defer(function()
+		local getInventory = shopEvents:WaitForChild("GetInventory") :: RemoteFunction
+		local ok, result = pcall(function()
+			return getInventory:InvokeServer()
+		end)
+		if ok and result then
+			self:UpdateInventory(result)
+		end
+	end)
 end
 
 -- ---------------------------------------------------------------------------
@@ -47,14 +73,12 @@ end
 -- ---------------------------------------------------------------------------
 
 function InventoryController:_ResolveGUI()
-	local playerGui = Players.LocalPlayer:FindFirstChild("PlayerGui")
-	if not playerGui then
-		return
-	end
-
-	local gui = playerGui:FindFirstChild("InventoryUI")
+	local playerGui = Players.LocalPlayer:WaitForChild("PlayerGui")
+	local gui = playerGui:WaitForChild("InventoryUI")
 	if gui and gui:IsA("ScreenGui") then
 		self._inventoryGui = gui
+		-- Enable the ScreenGui (starts disabled in Studio)
+		gui.Enabled = true
 		self:_CacheSlots()
 	end
 end
@@ -64,12 +88,19 @@ function InventoryController:_CacheSlots()
 		return
 	end
 
-	-- Cache hotbar slots
+	-- Find or create the consumable hotbar container
+	local hotbarFrame = self._inventoryGui:FindFirstChild("ConsumableHotbar", true)
+	if not hotbarFrame then
+		return
+	end
+
+	-- Cache or create hotbar slots
 	for i = 1, HOTBAR_SLOTS do
-		local slot = self._inventoryGui:FindFirstChild(`ConsumableSlot_{i}`, true)
-		if slot and slot:IsA("ImageButton") then
-			self._hotbarSlots[i] = slot
+		local slot = hotbarFrame:FindFirstChild(`ConsumableSlot_{i}`)
+		if not slot or not slot:IsA("ImageButton") then
+			slot = self:_CreateHotbarSlot(hotbarFrame, i)
 		end
+		self._hotbarSlots[i] = slot
 	end
 
 	-- Cache equip slots
@@ -81,6 +112,47 @@ function InventoryController:_CacheSlots()
 			end
 		end
 	end
+end
+
+-- Creates a single hotbar slot button with Count and Keybind labels.
+function InventoryController:_CreateHotbarSlot(parent: Instance, index: number): ImageButton
+	local button = Instance.new("ImageButton")
+	button.Name = `ConsumableSlot_{index}`
+	button.Size = UDim2.fromOffset(60, 60)
+	button.Position = UDim2.fromOffset(10 + (index - 1) * 72, 5)
+	button.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+	button.BackgroundTransparency = 0.3
+	button.BorderSizePixel = 1
+	button.BorderColor3 = Color3.fromRGB(100, 100, 100)
+	button.Image = "rbxassetid://0000000000"
+	button.Visible = true
+	button.Parent = parent
+
+	local countLabel = Instance.new("TextLabel")
+	countLabel.Name = "Count"
+	countLabel.Size = UDim2.fromOffset(50, 20)
+	countLabel.Position = UDim2.fromOffset(5, 35)
+	countLabel.BackgroundTransparency = 1
+	countLabel.Text = ""
+	countLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+	countLabel.TextScaled = true
+	countLabel.Font = Enum.Font.PermanentMarker
+	countLabel.Visible = true
+	countLabel.Parent = button
+
+	local keyLabel = Instance.new("TextLabel")
+	keyLabel.Name = "Keybind"
+	keyLabel.Size = UDim2.fromOffset(30, 20)
+	keyLabel.Position = UDim2.fromOffset(15, 0)
+	keyLabel.BackgroundTransparency = 1
+	keyLabel.Text = tostring(index)
+	keyLabel.TextColor3 = Color3.fromRGB(255, 220, 100)
+	keyLabel.TextScaled = true
+	keyLabel.Font = Enum.Font.PermanentMarker
+	keyLabel.Visible = true
+	keyLabel.Parent = button
+
+	return button
 end
 
 -- ---------------------------------------------------------------------------
@@ -153,6 +225,10 @@ function InventoryController:UpdateInventory(inventoryData: { [string]: any })
 	if inventoryData.EquippedItems then
 		self._inventoryData.EquippedItems = inventoryData.EquippedItems
 	end
+	-- If catalog data is included, store it for icon lookups
+	if inventoryData.Catalog then
+		self._catalog = inventoryData.Catalog
+	end
 
 	self:_RenderHotbar()
 	self:_RenderEquipSlots()
@@ -194,7 +270,9 @@ function InventoryController:_RenderHotbar()
 			self._slotBindings[i] = itemId
 
 			slot.Visible = true
-			slot.Image = "rbxassetid://0000000000" -- Default icon, will be overridden
+			-- Look up the item icon from the catalog
+			local itemDef = self._catalog[itemId]
+			slot.Image = (itemDef and itemDef.Icon) or "rbxassetid://0000000000"
 			slot.BackgroundTransparency = 0.5
 
 			-- Set count label

@@ -51,6 +51,7 @@ local ROUND_REPLICATION_NAME = "RoundReplication"
 local ANNOUNCEMENT_EVENT_NAME = "AnnouncementEvent"
 local PLAYER_ACTION_NAME = "PlayerAction"
 local MOVEMENT_ACTION_NAME = "MovementAction"
+local MOVEMENT_STATE_NAME = "MovementStateReplication"
 
 function ReplicationService.new()
 	local self: any = BaseService.new("ReplicationService")
@@ -59,6 +60,7 @@ function ReplicationService.new()
 	self._announcementRemote = nil :: RemoteEvent?
 	self._playerActionRemote = nil :: RemoteEvent?
 	self._movementActionRemote = nil :: RemoteEvent?
+	self._movementStateRemote = nil :: RemoteEvent?
 	self._started = false
 	self._connectionCount = 0
 	return setmetatable(self, ReplicationService)
@@ -120,6 +122,26 @@ function ReplicationService:Start()
 		return
 	end
 	self._movementActionRemote = movementActionRemote
+
+	-- Resolve movement state remote (server -> client, push)
+	local movementStateRemote = remotes:FindFirstChild(MOVEMENT_STATE_NAME)
+	if not movementStateRemote or not movementStateRemote:IsA("RemoteEvent") then
+		print("[Replication] error: MovementStateReplication RemoteEvent missing")
+		return
+	end
+	self._movementStateRemote = movementStateRemote
+
+	-- GetMovementState: Client pulls current movement state (RemoteFunction)
+	local getMovementState = remotes:FindFirstChild("GetMovementState")
+	if getMovementState and getMovementState:IsA("RemoteFunction") then
+		getMovementState.OnServerInvoke = function(player: Player)
+			local movementService = self.Services:Get("MovementService")
+			if movementService then
+				return movementService:GetMovementState(player)
+			end
+			return nil
+		end
+	end
 
 	-- ---- Bomb replication subscriptions ----
 
@@ -201,6 +223,35 @@ function ReplicationService:Start()
 		end
 	end)
 	self._connectionCount = self._connectionCount + 1
+
+	-- ---- Movement state replication (server -> client) ----
+	-- Pushes modifier changes (ExtraJumps, Speed, etc.) to the owning client.
+
+	EventManager:Connect(EventNames.MovementStateChanged, function(player: Player, state: any)
+		if self._movementStateRemote then
+			self._movementStateRemote:FireClient(player, state)
+		end
+	end)
+	self._connectionCount = self._connectionCount + 1
+
+	-- Re-fire current movement state for already-joined players. The
+	-- ItemEffectService may have fired MovementStateChanged during its
+	-- Start() loop before this bridge was connected. We wait 2 seconds
+	-- to ensure clients have loaded their MovementController scripts
+	-- and connected OnClientEvent listeners.
+	task.wait(2)
+	local movementService = self.Services:Get("MovementService")
+	if movementService then
+		local stateRemote = self._movementStateRemote
+		if stateRemote then
+			for _, player in ipairs(Players:GetPlayers()) do
+				local state = movementService:GetMovementState(player)
+				if state then
+					stateRemote:FireClient(player, state)
+				end
+			end
+		end
+	end
 
 	print(`[Replication] subscribed to all events ({self._connectionCount} total connections)`)
 end

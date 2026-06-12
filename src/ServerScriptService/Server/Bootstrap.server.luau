@@ -18,6 +18,7 @@ local serviceModules = {
 	"CurrencyManager",
 	"InventoryManager",
 	"StoreManager",
+	"ItemEffectService",
 	"AdminService",
 	"CommandService",
 	"BombManager",

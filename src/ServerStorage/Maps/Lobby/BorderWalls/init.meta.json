@@ -2,9 +2,9 @@
   "className": "UnionOperation",
   "properties": {
     "Anchored": true,
-    "CanCollide": false,
-    "CFrame": [0, 78, 0, 0, 0, 1, 1, 0, 0, 0, 1, 0],
+    "CFrame": [0, 102.5, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1],
     "Color": [163, 162, 165],
-    "Size": [1, 100, 100]
+    "Size": [102, 50, 102],
+    "Transparency": 1
   }
 }
