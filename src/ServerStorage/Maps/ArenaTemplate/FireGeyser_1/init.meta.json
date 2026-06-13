@@ -1,0 +1,24 @@
+{
+  "className": "Part",
+  "properties": {
+    "Size": {
+      "dataType": "Vector3",
+      "value": [3, 1, 3]
+    },
+    "Position": {
+      "dataType": "Vector3",
+      "value": [-20, 0.5, -20]
+    },
+    "BrickColor": {
+      "dataType": "BrickColor",
+      "value": "Bright orange"
+    },
+    "Material": "Neon",
+    "Transparency": 0.5,
+    "Anchored": true,
+    "CanCollide": false,
+    "Attributes": {
+      "HazardType": "FireGeyser"
+    }
+  }
+}

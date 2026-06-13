@@ -13,6 +13,8 @@ local controllerModules = {
 	"ShopController",
 	"InventoryController",
 	"MapVoteController",
+	"HazardClientController",
+	"AtmosphereClientController",
 }
 
 for _, controllerName in ipairs(controllerModules) do

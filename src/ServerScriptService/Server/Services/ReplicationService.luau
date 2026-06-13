@@ -59,6 +59,8 @@ local PLAYER_ACTION_NAME = "PlayerAction"
 local MOVEMENT_ACTION_NAME = "MovementAction"
 local MOVEMENT_STATE_NAME = "MovementStateReplication"
 local MAP_VOTE_NAME = "MapVote"
+local ATMOSPHERE_STATE_NAME = "AtmosphereState"
+local HAZARD_EVENT_NAME = "HazardEvent"
 
 function ReplicationService.new()
 	local self: any = BaseService.new("ReplicationService")
@@ -69,6 +71,8 @@ function ReplicationService.new()
 	self._movementActionRemote = nil :: RemoteEvent?
 	self._movementStateRemote = nil :: RemoteEvent?
 	self._mapVoteRemote = nil :: RemoteEvent?
+	self._atmosphereRemote = nil :: RemoteEvent?
+	self._hazardRemote = nil :: RemoteEvent?
 	self._started = false
 	self._connectionCount = 0
 	return setmetatable(self, ReplicationService)
@@ -146,6 +150,22 @@ function ReplicationService:Start()
 		return
 	end
 	self._mapVoteRemote = mapVoteRemote
+
+	-- Resolve atmosphere state remote (server -> client)
+	local atmosphereRemote = remotes:FindFirstChild(ATMOSPHERE_STATE_NAME)
+	if not atmosphereRemote or not atmosphereRemote:IsA("RemoteEvent") then
+		print("[Replication] error: AtmosphereState RemoteEvent missing")
+		return
+	end
+	self._atmosphereRemote = atmosphereRemote
+
+	-- Resolve hazard event remote (server -> client)
+	local hazardRemote = remotes:FindFirstChild(HAZARD_EVENT_NAME)
+	if not hazardRemote or not hazardRemote:IsA("RemoteEvent") then
+		print("[Replication] error: HazardEvent RemoteEvent missing")
+		return
+	end
+	self._hazardRemote = hazardRemote
 
 	-- GetMovementState: Client pulls current movement state (RemoteFunction)
 	local getMovementState = remotes:FindFirstChild("GetMovementState")
@@ -281,6 +301,74 @@ function ReplicationService:Start()
 	end)
 	self._connectionCount = self._connectionCount + 1
 
+	-- ---- Atmosphere replication subscriptions ----
+
+	-- Bridge atmosphere state to clients.
+	EventManager:Connect(EventNames.AtmosphereApplied, function(atmosphereData: any)
+		self:_FireAtmosphere("AtmosphereApplied", atmosphereData)
+	end)
+	self._connectionCount = self._connectionCount + 1
+
+	EventManager:Connect(EventNames.AtmosphereCleared, function()
+		self:_FireAtmosphere("AtmosphereCleared")
+	end)
+	self._connectionCount = self._connectionCount + 1
+
+	EventManager:Connect(EventNames.LightningFlashed, function(thunderVolume: number)
+		self:_FireHazard("LightningFlash", thunderVolume)
+	end)
+	self._connectionCount = self._connectionCount + 1
+
+	-- ---- Hazard replication subscriptions ----
+
+	EventManager:Connect(EventNames.HazardDamaged, function(player: Player, damageAmount: number, currentHealth: number, hazardName: string)
+		-- Send damage info to the damaged player only.
+		if self._hazardRemote then
+			self._hazardRemote:FireClient(player, "HazardDamaged", player, damageAmount, currentHealth, hazardName)
+		end
+	end)
+	self._connectionCount = self._connectionCount + 1
+
+	EventManager:Connect(EventNames.EarthquakeStarted, function(magnitude: number, duration: number)
+		self:_FireHazard("EarthquakeStarted", magnitude, duration)
+	end)
+	self._connectionCount = self._connectionCount + 1
+
+	EventManager:Connect(EventNames.EarthquakeEnded, function()
+		self:_FireHazard("EarthquakeEnded")
+	end)
+	self._connectionCount = self._connectionCount + 1
+
+	EventManager:Connect(EventNames.FloodStarted, function(startHeight: number, maxHeight: number)
+		self:_FireHazard("FloodStarted", startHeight, maxHeight)
+	end)
+	self._connectionCount = self._connectionCount + 1
+
+	EventManager:Connect(EventNames.FloodHeightChanged, function(height: number)
+		self:_FireHazard("FloodHeightChanged", height)
+	end)
+	self._connectionCount = self._connectionCount + 1
+
+	EventManager:Connect(EventNames.FireGeyserErupted, function(position: Vector3, height: number, duration: number)
+		self:_FireHazard("FireGeyserErupted", position, height, duration)
+	end)
+	self._connectionCount = self._connectionCount + 1
+
+	EventManager:Connect(EventNames.TornadoStarted, function(position: Vector3, radius: number)
+		self:_FireHazard("TornadoStarted", position, radius)
+	end)
+	self._connectionCount = self._connectionCount + 1
+
+	EventManager:Connect(EventNames.TornadoMoved, function(position: Vector3)
+		self:_FireHazard("TornadoMoved", position)
+	end)
+	self._connectionCount = self._connectionCount + 1
+
+	EventManager:Connect(EventNames.TornadoEnded, function()
+		self:_FireHazard("TornadoEnded")
+	end)
+	self._connectionCount = self._connectionCount + 1
+
 	-- Re-fire current movement state for already-joined players. The
 	-- ItemEffectService may have fired MovementStateChanged during its
 	-- Start() loop before this bridge was connected. We wait 2 seconds
@@ -330,6 +418,26 @@ function ReplicationService:_FireMapVote(payloadType: string, ...)
 	local remote = self._mapVoteRemote
 	if not remote then
 		print("[Replication] dropped map vote payload (no remote):", payloadType)
+		return
+	end
+	remote:FireAllClients(payloadType, ...)
+end
+
+function ReplicationService:_FireAtmosphere(payloadType: string, ...)
+	print(`[Replication] atmosphere fired {payloadType}`)
+	local remote = self._atmosphereRemote
+	if not remote then
+		print("[Replication] dropped atmosphere payload (no remote):", payloadType)
+		return
+	end
+	remote:FireAllClients(payloadType, ...)
+end
+
+function ReplicationService:_FireHazard(payloadType: string, ...)
+	print(`[Replication] hazard fired {payloadType}`)
+	local remote = self._hazardRemote
+	if not remote then
+		print("[Replication] dropped hazard payload (no remote):", payloadType)
 		return
 	end
 	remote:FireAllClients(payloadType, ...)

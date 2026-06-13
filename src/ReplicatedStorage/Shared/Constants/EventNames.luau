@@ -53,4 +53,22 @@ return table.freeze({
 	MapVoteEnded = "MapVoteEnded",
 	MapVoteUpdated = "MapVoteUpdated",
 	MapVoteCasted = "MapVoteCasted",
+
+	-- Hazard system events
+	HazardDamaged = "HazardDamaged",
+	HazardEliminated = "HazardEliminated",
+	EarthquakeStarted = "EarthquakeStarted",
+	EarthquakeEnded = "EarthquakeEnded",
+	FloodStarted = "FloodStarted",
+	FloodHeightChanged = "FloodHeightChanged",
+	FloodEnded = "FloodEnded",
+	FireGeyserErupted = "FireGeyserErupted",
+	TornadoStarted = "TornadoStarted",
+	TornadoMoved = "TornadoMoved",
+	TornadoEnded = "TornadoEnded",
+
+	-- Atmosphere system events
+	AtmosphereApplied = "AtmosphereApplied",
+	AtmosphereCleared = "AtmosphereCleared",
+	LightningFlashed = "LightningFlashed",
 })

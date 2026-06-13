@@ -81,6 +81,11 @@ local GameConfig = {
         -- If fewer maps are available, the default map is used directly.
         MinimumMapsForVote = 2,
     },
+
+    Player = {
+        -- Default health pool; hazards reduce this. When 0, player is eliminated.
+        DefaultHealth = 100,
+    },
 }
 
 return GameConfig

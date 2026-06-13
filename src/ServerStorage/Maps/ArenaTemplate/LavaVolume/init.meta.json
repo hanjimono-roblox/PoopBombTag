@@ -1,0 +1,24 @@
+{
+  "className": "Part",
+  "properties": {
+    "Size": {
+      "dataType": "Vector3",
+      "value": [40, 1, 40]
+    },
+    "Position": {
+      "dataType": "Vector3",
+      "value": [0, 0.5, 0]
+    },
+    "BrickColor": {
+      "dataType": "BrickColor",
+      "value": "Bright red"
+    },
+    "Material": "Neon",
+    "Transparency": 0.4,
+    "Anchored": true,
+    "CanCollide": false,
+    "Attributes": {
+      "HazardType": "Lava"
+    }
+  }
+}
