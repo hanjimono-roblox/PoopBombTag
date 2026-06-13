@@ -62,6 +62,13 @@ function GameManager:GetState(): string
 end
 
 function GameManager:RunLifecycle()
+	local votedMapName = nil :: string?
+
+	-- Listen for MapVoteEnded so we know the winning map.
+	EventManager:Connect(EventNames.MapVoteEnded, function(winner: string)
+		votedMapName = winner
+	end)
+
 	while true do
 		-- Only count ActiveParticipants. Lobby players, Spectators, and
 		-- Eliminated players are excluded from round start requirements.
@@ -71,13 +78,30 @@ function GameManager:RunLifecycle()
 		if participantCount >= GameConfig.Round.MinimumPlayers then
 			-- Enough ActiveParticipants: start the round sequence.
 			self:SetState(GameStates.Intermission)
-			task.wait(GameConfig.Round.IntermissionDurationSeconds)
+
+			-- During intermission, trigger a map vote (if enough maps are available).
+			local mapVoteService = self.Services:Get("MapVoteService")
+			local voteStarted = mapVoteService:StartVote()
+
+			if voteStarted then
+				-- Wait for the vote to complete. The vote timer runs
+				-- for VoteDurationSeconds inside MapVoteService. We poll
+				-- until voting is no longer active.
+				while mapVoteService:IsVotingActive() do
+					task.wait(0.5)
+				end
+			else
+				-- Not enough maps for a vote; just wait the standard intermission.
+				task.wait(GameConfig.Round.IntermissionDurationSeconds)
+			end
 
 			self:SetState(GameStates.Starting)
 			task.wait(GameConfig.Round.StartingDurationSeconds)
 
 			self:SetState(GameStates.Playing)
-			local started = self.Services:Get("RoundManager"):StartRound()
+			local started = self.Services:Get("RoundManager"):StartRound(nil, votedMapName)
+			-- Consume the voted map name so it doesn't carry to the next round.
+			votedMapName = nil
 			if not started then
 				-- Round failed to start (map missing, etc.). Return to Lobby.
 				self:SetState(GameStates.Lobby)

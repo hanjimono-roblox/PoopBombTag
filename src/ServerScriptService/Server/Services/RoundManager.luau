@@ -128,7 +128,11 @@ end
 --   1. No round currently active.
 --   2. Enough ActiveParticipants (from PlayerStateService).
 --   3. Map can be loaded.
-function RoundManager:StartRound(mode: string?): boolean
+--
+-- @param mode - Optional round mode override (e.g. "FirstElimination").
+-- @param mapName - Optional map name override from map voting. If nil,
+--                  a random map is selected (excluding Lobby).
+function RoundManager:StartRound(mode: string?, mapName: string?): boolean
 	local selfAny = self :: any
 	if selfAny._active then
 		return false
@@ -143,9 +147,10 @@ function RoundManager:StartRound(mode: string?): boolean
 
 	local resolvedMode = mode or GameConfig.Round.DefaultMode
 
-	-- Load the arena map.
+	-- Load the arena map. If a map name was provided (from voting), use it;
+	-- otherwise let MapManager select a random map (which excludes Lobby).
 	local mapManager = self.Services:Get("MapManager")
-	local map = mapManager:LoadMap()
+	local map = if mapName then mapManager:LoadMap(mapName) else mapManager:LoadMap()
 	if not map then
 		return false
 	end

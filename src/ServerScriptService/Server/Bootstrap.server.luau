@@ -10,6 +10,7 @@ local serviceModules = {
 	"DataManager",
 	"CatalogService",
 	"MapManager",
+	"MapVoteService",
 	"PlayerStateService",
 	"PlayerManager",
 	"SpawnService",

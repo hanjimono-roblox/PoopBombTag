@@ -47,4 +47,10 @@ return table.freeze({
 	CoinCollected = "CoinCollected",
 	CoinSpawned = "CoinSpawned",
 	CoinDespawned = "CoinDespawned",
+
+	-- Map voting system
+	MapVoteStarted = "MapVoteStarted",
+	MapVoteEnded = "MapVoteEnded",
+	MapVoteUpdated = "MapVoteUpdated",
+	MapVoteCasted = "MapVoteCasted",
 })

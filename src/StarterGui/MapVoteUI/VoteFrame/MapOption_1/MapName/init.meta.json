@@ -1,0 +1,21 @@
+{
+  "className": "TextLabel",
+  "properties": {
+    "Size": {
+      "dataType": "UDim2",
+      "value": [0.7, 0, 1, 0]
+    },
+    "Position": {
+      "dataType": "UDim2",
+      "value": [0, 0, 0, 0]
+    },
+    "Text": "Map Name",
+    "TextColor3": {
+      "dataType": "Color3",
+      "value": [1, 1, 1]
+    },
+    "TextScaled": true,
+    "BackgroundTransparency": 1,
+    "Font": "GothamSemibold"
+  }
+}

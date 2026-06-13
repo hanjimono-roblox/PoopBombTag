@@ -71,6 +71,16 @@ local GameConfig = {
         CollectRadius = 4.0,
         RespawnVariance = 0.3,
     },
+
+    MapVote = {
+        -- Number of map options presented to players during voting
+        OptionsCount = 3,
+        -- Duration in seconds that the voting window stays open
+        VoteDurationSeconds = 10,
+        -- Minimum number of maps required (excluding Lobby) to trigger voting.
+        -- If fewer maps are available, the default map is used directly.
+        MinimumMapsForVote = 2,
+    },
 }
 
 return GameConfig

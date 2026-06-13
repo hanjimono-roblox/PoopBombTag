@@ -1,0 +1,22 @@
+{
+  "className": "Frame",
+  "properties": {
+    "Size": {
+      "dataType": "UDim2",
+      "value": [0.5, 0, 0.5, 0]
+    },
+    "Position": {
+      "dataType": "UDim2",
+      "value": [0.25, 0, 0.25, 0]
+    },
+    "BackgroundColor3": {
+      "dataType": "Color3",
+      "value": [0, 0, 0]
+    },
+    "BackgroundTransparency": {
+      "dataType": "float",
+      "value": 0.5
+    },
+    "BorderSizePixel": 0
+  }
+}

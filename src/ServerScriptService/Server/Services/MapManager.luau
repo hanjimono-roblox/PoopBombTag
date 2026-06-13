@@ -59,7 +59,13 @@ function MapManager:SelectRandomMap(): string
 		return GameConfig.Maps.DefaultMapName
 	end
 
-	local maps = mapsFolder:GetChildren()
+	-- Filter out the Lobby map so it can never be selected as a playable arena.
+	local maps = {}
+	for _, child in ipairs(mapsFolder:GetChildren()) do
+		if child.Name ~= "Lobby" then
+			table.insert(maps, child)
+		end
+	end
 	if #maps == 0 then
 		return GameConfig.Maps.DefaultMapName
 	end
@@ -120,8 +126,10 @@ function MapManager:GetSpawnPoints(): { BasePart }
 	return spawns
 end
 
+-- Map voting has been moved to MapVoteService.
+-- Deprecated. Kept as a no-op for compatibility with any existing callers.
 function MapManager:BeginMapVote()
-	-- TODO: Publish voting options through remotes and collect server-validated votes.
+	-- No-op; use MapVoteService:StartVote() instead.
 end
 
 return MapManager

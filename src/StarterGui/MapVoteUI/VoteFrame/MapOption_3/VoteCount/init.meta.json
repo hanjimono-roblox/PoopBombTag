@@ -1,0 +1,21 @@
+{
+  "className": "TextLabel",
+  "properties": {
+    "Size": {
+      "dataType": "UDim2",
+      "value": [0.2, 0, 1, 0]
+    },
+    "Position": {
+      "dataType": "UDim2",
+      "value": [0.8, 0, 0, 0]
+    },
+    "Text": "0",
+    "TextColor3": {
+      "dataType": "Color3",
+      "value": [1, 1, 0]
+    },
+    "TextScaled": true,
+    "BackgroundTransparency": 1,
+    "Font": "GothamBold"
+  }
+}

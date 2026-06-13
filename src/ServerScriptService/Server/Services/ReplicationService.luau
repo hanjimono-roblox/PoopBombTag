@@ -34,6 +34,12 @@
 --     (message: string)
 --   PlayerAction (client -> server):
 --     action = "ReturnToLobby" : (action: string)
+--   MapVote (server -> client):
+--     type = "MapVoteStarted"  : (type, options: {string}, durationSeconds: number)
+--     type = "MapVoteUpdated"  : (type, votes: {[string]: number})
+--     type = "MapVoteEnded"    : (type, winner: string, votes: {[string]: number})
+--   MapVote (client -> server):
+--     action = "CastVote"      : (action: string, mapName: string)
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -52,6 +58,7 @@ local ANNOUNCEMENT_EVENT_NAME = "AnnouncementEvent"
 local PLAYER_ACTION_NAME = "PlayerAction"
 local MOVEMENT_ACTION_NAME = "MovementAction"
 local MOVEMENT_STATE_NAME = "MovementStateReplication"
+local MAP_VOTE_NAME = "MapVote"
 
 function ReplicationService.new()
 	local self: any = BaseService.new("ReplicationService")
@@ -61,6 +68,7 @@ function ReplicationService.new()
 	self._playerActionRemote = nil :: RemoteEvent?
 	self._movementActionRemote = nil :: RemoteEvent?
 	self._movementStateRemote = nil :: RemoteEvent?
+	self._mapVoteRemote = nil :: RemoteEvent?
 	self._started = false
 	self._connectionCount = 0
 	return setmetatable(self, ReplicationService)
@@ -130,6 +138,14 @@ function ReplicationService:Start()
 		return
 	end
 	self._movementStateRemote = movementStateRemote
+
+	-- Resolve map vote remote (bidirectional)
+	local mapVoteRemote = remotes:FindFirstChild(MAP_VOTE_NAME)
+	if not mapVoteRemote or not mapVoteRemote:IsA("RemoteEvent") then
+		print("[Replication] error: MapVote RemoteEvent missing")
+		return
+	end
+	self._mapVoteRemote = mapVoteRemote
 
 	-- GetMovementState: Client pulls current movement state (RemoteFunction)
 	local getMovementState = remotes:FindFirstChild("GetMovementState")
@@ -234,6 +250,37 @@ function ReplicationService:Start()
 	end)
 	self._connectionCount = self._connectionCount + 1
 
+	-- ---- MapVote replication subscriptions ----
+
+	-- Bridge MapVoteStarted to clients.
+	EventManager:Connect(EventNames.MapVoteStarted, function(options: { string }, durationSeconds: number)
+		self:_FireMapVote("MapVoteStarted", options, durationSeconds)
+	end)
+	self._connectionCount = self._connectionCount + 1
+
+	-- Bridge MapVoteUpdated to clients.
+	EventManager:Connect(EventNames.MapVoteUpdated, function(votes: { [string]: number })
+		self:_FireMapVote("MapVoteUpdated", votes)
+	end)
+	self._connectionCount = self._connectionCount + 1
+
+	-- Bridge MapVoteEnded to clients.
+	EventManager:Connect(EventNames.MapVoteEnded, function(winner: string, votes: { [string]: number })
+		self:_FireMapVote("MapVoteEnded", winner, votes)
+	end)
+	self._connectionCount = self._connectionCount + 1
+
+	-- Listen for client vote cast actions on the MapVote remote.
+	self._mapVoteRemote.OnServerEvent:Connect(function(player: Player, action: string, mapName: string)
+		if action == "CastVote" then
+			local mapVoteService = self.Services:Get("MapVoteService")
+			if mapVoteService then
+				mapVoteService:CastVote(player, mapName)
+			end
+		end
+	end)
+	self._connectionCount = self._connectionCount + 1
+
 	-- Re-fire current movement state for already-joined players. The
 	-- ItemEffectService may have fired MovementStateChanged during its
 	-- Start() loop before this bridge was connected. We wait 2 seconds
@@ -273,6 +320,16 @@ function ReplicationService:_FireRound(payloadType: string, ...)
 	local remote = self._roundRemote
 	if not remote then
 		print("[Replication] dropped round payload (no remote):", payloadType)
+		return
+	end
+	remote:FireAllClients(payloadType, ...)
+end
+
+function ReplicationService:_FireMapVote(payloadType: string, ...)
+	print(`[Replication] mapvote fired {payloadType}`)
+	local remote = self._mapVoteRemote
+	if not remote then
+		print("[Replication] dropped map vote payload (no remote):", payloadType)
 		return
 	end
 	remote:FireAllClients(payloadType, ...)
