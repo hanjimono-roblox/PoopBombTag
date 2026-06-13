@@ -299,7 +299,7 @@ local ShopConfig = {
 				TrailAttachment = "HumanoidRootPart",
 				TrailColor = Color3.fromRGB(255, 215, 0),
 				TrailLifetime = 0.8,
-				TrailWidth = 0.5,
+				TrailWidth = 1.0,
 			},
 		}),
 
@@ -333,7 +333,7 @@ local ShopConfig = {
 			ProductId = 3604035245,
 			Tags = { "death", "particles" },
 			Effects = {
-				ParticleTexture = "rbxassetid://0000000000",
+				ParticleTexture = "133722058245077",
 				ParticleCount = 50,
 				ParticleLifetime = 2.0,
 			},
@@ -404,11 +404,248 @@ local ShopConfig = {
 			Effects = {
 				TrailAttachment = "HumanoidRootPart",
 				TrailColor = Color3.fromRGB(0, 255, 255),
-				TrailLifetime = 0.6,
-				TrailWidth = 0.4,
-				TrailTexture = "rbxassetid://97359507028622",
+				TrailLifetime = 0.3,
+				TrailWidth = 1.4,
+				TextureLength = 8,
+				TrailTexture = "http://www.roblox.com/asset/?id=536219459",
 			},
 		}),
+
+WhiteBirdSkin = item({
+	Id = "WhiteBirdSkin",
+	Name = "White Bird",
+	Description = "Pure white plumage.",
+	Category = "BirdSkin",
+	Rarity = "Common",
+	Slot = "BirdSkin",
+	PricePoop = 100,
+	Icon = "rbxassetid://REPLACE_ME",
+
+	Tags = { "bird", "skin" },
+
+	Effects = {
+		BirdSkin = "WhiteBird",
+	},
+}),
+
+BrownBirdSkin = item({
+	Id = "BrownBirdSkin",
+	Name = "Brown Bird",
+	Description = "A humble woodland bird.",
+	Category = "BirdSkin",
+	Rarity = "Common",
+	Slot = "BirdSkin",
+	PricePoop = 200,
+	Icon = "rbxassetid://REPLACE_ME",
+
+	Tags = { "bird", "skin" },
+
+	Effects = {
+		BirdSkin = "BrownBird",
+	},
+}),
+
+BlueJaySkin = item({
+	Id = "BlueJaySkin",
+	Name = "Blue Jay",
+	Description = "Bright blue feathers with white accents.",
+	Category = "BirdSkin",
+	Rarity = "Uncommon",
+	Slot = "BirdSkin",
+	PricePoop = 500,
+	Icon = "rbxassetid://REPLACE_ME",
+
+	Tags = { "bird", "skin" },
+
+	Effects = {
+		BirdSkin = "BlueJay",
+		AuraColor = Color3.fromRGB(70, 160, 255),
+	},
+}),
+
+RavenSkin = item({
+	Id = "RavenSkin",
+	Name = "Raven",
+	Description = "Dark and mysterious.",
+	Category = "BirdSkin",
+	Rarity = "Uncommon",
+	Slot = "BirdSkin",
+	PricePoop = 750,
+	Icon = "rbxassetid://REPLACE_ME",
+
+	Tags = { "bird", "skin" },
+
+	Effects = {
+		BirdSkin = "Raven",
+		AuraColor = Color3.fromRGB(40, 40, 40),
+	},
+}),
+
+FrostBirdSkin = item({
+	Id = "FrostBirdSkin",
+	Name = "Frost Bird",
+	Description = "Touched by winter winds.",
+	Category = "BirdSkin",
+	Rarity = "Rare",
+	Slot = "BirdSkin",
+	PricePoop = 1500,
+	Icon = "rbxassetid://REPLACE_ME",
+
+	Tags = { "bird", "skin", "ice" },
+
+	Effects = {
+		BirdSkin = "FrostBird",
+
+		AuraColor = Color3.fromRGB(150, 220, 255),
+
+		ParticleTexture = "rbxassetid://SNOWFLAKE_TEXTURE",
+		ParticleColor = Color3.fromRGB(200, 240, 255),
+		ParticleRate = 8,
+	},
+}),
+
+CrystalBirdSkin = item({
+	Id = "CrystalBirdSkin",
+	Name = "Crystal Bird",
+	Description = "Shimmering crystal feathers.",
+	Category = "BirdSkin",
+	Rarity = "Rare",
+	Slot = "BirdSkin",
+	PricePoop = 2000,
+	Icon = "rbxassetid://REPLACE_ME",
+
+	Tags = { "bird", "skin", "crystal" },
+
+	Effects = {
+		BirdSkin = "CrystalBird",
+
+		AuraColor = Color3.fromRGB(120, 255, 255),
+
+		ParticleTexture = "rbxassetid://CRYSTAL_SPARKLE_TEXTURE",
+		ParticleColor = Color3.fromRGB(180, 255, 255),
+		ParticleRate = 10,
+	},
+}),
+
+StormBirdSkin = item({
+	Id = "StormBirdSkin",
+	Name = "Storm Bird",
+	Description = "Crackling with energy.",
+	Category = "BirdSkin",
+	Rarity = "Epic",
+	Slot = "BirdSkin",
+	PricePoop = 3500,
+	Icon = "rbxassetid://REPLACE_ME",
+
+	Tags = { "bird", "skin", "storm" },
+
+	Effects = {
+		BirdSkin = "StormBird",
+
+		AuraColor = Color3.fromRGB(120, 120, 255),
+
+		ParticleTexture = "rbxassetid://LIGHTNING_TEXTURE",
+		ParticleColor = Color3.fromRGB(180, 180, 255),
+		ParticleRate = 15,
+	},
+}),
+
+GoldenBirdSkin = item({
+	Id = "GoldenBirdSkin",
+	Name = "Golden Bird",
+	Description = "Radiates wealth and prestige.",
+	Category = "BirdSkin",
+	Rarity = "Epic",
+	Slot = "BirdSkin",
+	PricePoop = 5000,
+	Icon = "rbxassetid://REPLACE_ME",
+
+	Tags = { "bird", "skin", "gold" },
+
+	Effects = {
+		BirdSkin = "GoldenBird",
+
+		Material = Enum.Material.Metal,
+
+		AuraColor = Color3.fromRGB(255, 215, 0),
+	},
+}),
+
+PhoenixBirdSkin = item({
+	Id = "PhoenixBirdSkin",
+	Name = "Phoenix",
+	Description = "Reborn through eternal flames.",
+	Category = "BirdSkin",
+	Rarity = "Legendary",
+	Slot = "BirdSkin",
+	PricePoop = 7500,
+	PriceRobux = 299,
+	Icon = "rbxassetid://REPLACE_ME",
+
+	Tags = { "bird", "skin", "fire", "premium" },
+
+	Effects = {
+		BirdSkin = "PhoenixBird",
+
+		Material = Enum.Material.Neon,
+
+		AuraColor = Color3.fromRGB(255, 120, 0),
+
+		ParticleTexture = "rbxassetid://FIRE_TEXTURE",
+		ParticleColor = Color3.fromRGB(255, 120, 0),
+		ParticleRate = 20,
+	},
+}),
+
+VoidBirdSkin = item({
+	Id = "VoidBirdSkin",
+	Name = "Void Bird",
+	Description = "A creature from beyond reality.",
+	Category = "BirdSkin",
+	Rarity = "Legendary",
+	Slot = "BirdSkin",
+	PricePoop = 10000,
+	PriceRobux = 399,
+	Icon = "rbxassetid://REPLACE_ME",
+
+	Tags = { "bird", "skin", "void", "premium" },
+
+	Effects = {
+		BirdSkin = "VoidBird",
+
+		AuraColor = Color3.fromRGB(120, 0, 255),
+
+		ParticleTexture = "rbxassetid://VOID_TEXTURE",
+		ParticleColor = Color3.fromRGB(180, 0, 255),
+		ParticleRate = 20,
+	},
+}),
+
+DivineBirdSkin = item({
+	Id = "DivineBirdSkin",
+	Name = "Divine Bird",
+	Description = "Blessed by the heavens.",
+	Category = "BirdSkin",
+	Rarity = "Mythic",
+	Slot = "BirdSkin",
+	PricePoop = 25000,
+	PriceRobux = 999,
+	Icon = "rbxassetid://REPLACE_ME",
+
+	Tags = { "bird", "skin", "divine", "premium" },
+
+	Effects = {
+		BirdSkin = "DivineBird",
+
+		Material = Enum.Material.Neon,
+
+		AuraColor = Color3.fromRGB(255, 255, 200),
+
+		ParticleTexture = "rbxassetid://DIVINE_SPARKLE_TEXTURE",
+		ParticleColor = Color3.fromRGB(255, 255, 200),
+		ParticleRate = 30,
+	},
+}),
 	},
 
 	-- Categories derived automatically from items. This is a cached list
@@ -417,13 +654,10 @@ local ShopConfig = {
 	_Categories = nil :: { string }?,
 }
 
--- Returns dynamically-generated category list from the item definitions,
--- ordered: All, OneTime, Level, Consumable, Cosmetic.
+-- Returns dynamically-generated category list from the item definitions.
+-- Always regenerates to ensure new categories (e.g., BirdSkin) are included
+-- even after hot-reloads or module cache hits.
 function ShopConfig:GetCategories(): { string }
-	if self._Categories then
-		return self._Categories
-	end
-
 	local seen: { [string]: boolean } = {}
 	local ordered: { string } = { "All" }
 	for _, itemDef in pairs(self.Items) do
@@ -433,7 +667,6 @@ function ShopConfig:GetCategories(): { string }
 			seen[cat] = true
 		end
 	end
-	self._Categories = ordered
 	return ordered
 end
 

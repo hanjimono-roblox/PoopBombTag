@@ -119,6 +119,7 @@ function ShopController:_SetupGUIBindings()
 		Tab_Level = "Level",
 		Tab_Consumable = "Consumable",
 		Tab_Cosmetic = "Cosmetic",
+		Tab_BirdSkins = "BirdSkin",
 	}
 	for tabName, category in tabNames do
 		local tab = self._shopGui:FindFirstChild(tabName, true)
@@ -487,6 +488,15 @@ function ShopController:_RenderItemGrid()
 					statusLabel.Text = "OWNED"
 					statusLabel.TextColor3 = Color3.fromRGB(150, 255, 150)
 				end
+			elseif itemDef.Category == "BirdSkin" then
+				local slot = itemDef.Slot or ""
+				if self._inventory.EquippedItems[slot] == itemDef.Id then
+					statusLabel.Text = "EQUIPPED"
+					statusLabel.TextColor3 = Color3.fromRGB(255, 200, 0)
+				else
+					statusLabel.Text = "OWNED"
+					statusLabel.TextColor3 = Color3.fromRGB(150, 255, 150)
+				end
 			else
 				statusLabel.Text = "OWNED"
 				statusLabel.TextColor3 = Color3.fromRGB(150, 255, 150)
@@ -504,6 +514,26 @@ function ShopController:_RenderItemGrid()
 	-- Canvas size: X must be at least the container width for items to render
 	local totalRows = math.ceil(#items / GRID_COLUMNS)
 	container.CanvasSize = UDim2.fromOffset(560, totalRows * (195 + PADDING) + PADDING)
+end
+
+-- Cleanup table for button connections to prevent duplicate handlers
+-- Maps button path -> { RBXScriptConnection }
+local ButtonConnections = {} :: { [Instance]: { RBXScriptConnection } }
+
+local function clearButtonConnections(button: Instance)
+	local conns = ButtonConnections[button]
+	if conns then
+		for _, conn in ipairs(conns) do
+			conn:Disconnect()
+		end
+		ButtonConnections[button] = nil
+	end
+end
+
+local function connectButton(button: Instance, callback: () -> ())
+	clearButtonConnections(button)
+	local conn = button.MouseButton1Click:Connect(callback)
+	ButtonConnections[button] = { conn }
 end
 
 function ShopController:_RenderDetail(itemId: string)
@@ -543,7 +573,7 @@ function ShopController:_RenderDetail(itemId: string)
 		if itemDef.PricePoop and not self:_IsItemMaxed(itemDef) then
 			poopButton.Visible = true
 			poopButton.Text = `Buy {itemDef.PricePoop} 💩`
-			poopButton.MouseButton1Click:Connect(function()
+			connectButton(poopButton, function()
 				self:_OnPurchaseItem(itemDef.Id, "Poop")
 			end)
 		else
@@ -553,12 +583,11 @@ function ShopController:_RenderDetail(itemId: string)
 
 	local robuxButton = panel:FindFirstChild("ItemPriceRobux", true)
 	if robuxButton and robuxButton:IsA("TextButton") then
-		-- Use server-authoritative Robux pricing data
 		local robuxData = self._robuxPrices[itemId]
 		if robuxData and robuxData.price and not self:_IsItemMaxed(itemDef) then
 			robuxButton.Visible = true
 			robuxButton.Text = `Buy {robuxData.price} Robux`
-			robuxButton.MouseButton1Click:Connect(function()
+			connectButton(robuxButton, function()
 				self:_OnPurchaseItem(itemId, "Robux")
 			end)
 		else
@@ -581,16 +610,16 @@ function ShopController:_RenderDetail(itemId: string)
 	if ownedLabel then
 		local owned = self:_IsItemOwned(itemDef)
 		local isEquipped = false
-		if itemDef.Category == "Cosmetic" and itemDef.Slot then
+		if (itemDef.Category == "Cosmetic" or itemDef.Category == "BirdSkin") and itemDef.Slot then
 			isEquipped = self._inventory.EquippedItems[itemDef.Slot] == itemDef.Id
 		end
-		if owned and not isEquipped and itemDef.Category == "Cosmetic" then
+		if owned and not isEquipped and (itemDef.Category == "Cosmetic" or itemDef.Category == "BirdSkin") then
 			ownedLabel.Text = "OWNED"; ownedLabel.Visible = true
 			ownedLabel.TextColor3 = Color3.fromRGB(150, 255, 150)
 		elseif isEquipped then
 			ownedLabel.Text = "EQUIPPED"; ownedLabel.Visible = true
 			ownedLabel.TextColor3 = Color3.fromRGB(255, 200, 0)
-		elseif owned and itemDef.Category ~= "Cosmetic" then
+		elseif owned and itemDef.Category ~= "Cosmetic" and itemDef.Category ~= "BirdSkin" then
 			ownedLabel.Text = "OWNED"; ownedLabel.Visible = true
 			ownedLabel.TextColor3 = Color3.fromRGB(150, 255, 150)
 		else
@@ -600,17 +629,17 @@ function ShopController:_RenderDetail(itemId: string)
 
 	local equipButton = panel:FindFirstChild("EquipButton", true)
 	if equipButton and equipButton:IsA("TextButton") then
-		if itemDef.Category == "Cosmetic" and self:_IsItemOwned(itemDef) then
+		if (itemDef.Category == "Cosmetic" or itemDef.Category == "BirdSkin") and self:_IsItemOwned(itemDef) then
 			equipButton.Visible = true
 			local isEquipped = itemDef.Slot and self._inventory.EquippedItems[itemDef.Slot] == itemDef.Id
 			if isEquipped then
 				equipButton.Text = "Unequip"
-				equipButton.MouseButton1Click:Connect(function()
+				connectButton(equipButton, function()
 					self:_OnUnequipItem(itemDef.Slot :: string)
 				end)
 			else
 				equipButton.Text = `Equip to {itemDef.Slot}`
-				equipButton.MouseButton1Click:Connect(function()
+				connectButton(equipButton, function()
 					self:_OnEquipItem(itemDef.Id, itemDef.Slot :: string)
 				end)
 			end
@@ -625,7 +654,7 @@ function ShopController:_RenderDetail(itemId: string)
 		if itemDef.Category == "Consumable" and count > 0 then
 			useButton.Visible = true
 			useButton.Text = "Use"
-			useButton.MouseButton1Click:Connect(function()
+			connectButton(useButton, function()
 				self:_OnUseConsumable(itemDef.Id)
 			end)
 		else
@@ -728,6 +757,8 @@ function ShopController:_IsItemOwned(itemDef: any): boolean
 		return self._inventory.OwnedItems[itemDef.Id] == true
 	elseif itemDef.Category == "Cosmetic" then
 		return self._inventory.OwnedItems[itemDef.Id] == true
+	elseif itemDef.Category == "BirdSkin" then
+		return self._inventory.OwnedItems[itemDef.Id] == true
 	elseif itemDef.Category == "Level" then
 		return (self._inventory.ItemLevels[itemDef.Id] or 0) > 0
 	elseif itemDef.Category == "Consumable" then
@@ -743,8 +774,10 @@ function ShopController:_IsItemMaxed(itemDef: any): boolean
 	elseif itemDef.Category == "Consumable" then
 		local count = self._inventory.ConsumableCounts[itemDef.Id] or 0
 		return count >= (itemDef.MaxStack or 99)
+	elseif itemDef.Category == "Cosmetic" or itemDef.Category == "BirdSkin" then
+		return self:_IsItemOwned(itemDef)
 	end
-	return self:_IsItemOwned(itemDef) and itemDef.Category ~= "Consumable"
+	return false
 end
 
 function ShopController:_GetRarityColor(rarity: string): Color3

@@ -52,7 +52,7 @@ function InventoryManager:GrantItem(player: Player, itemId: string): (boolean, s
 
 	if category == "OneTime" then
 		return self:_GrantOneTime(player, state, itemId)
-	elseif category == "Cosmetic" then
+	elseif category == "Cosmetic" or category == "BirdSkin" then
 		return self:_GrantCosmetic(player, state, itemId)
 	elseif category == "Level" then
 		return self:_GrantLevel(player, state, itemId, itemDef)
@@ -135,7 +135,7 @@ function InventoryManager:EquipItem(player: Player, itemId: string, slot: string
 		return false, `Item "{itemId}" not found in catalog`
 	end
 
-	if itemDef.Category ~= "Cosmetic" then
+	if itemDef.Category ~= "Cosmetic" and itemDef.Category ~= "BirdSkin" then
 		return false, "Only cosmetic items can be equipped"
 	end
 
@@ -153,9 +153,12 @@ function InventoryManager:EquipItem(player: Player, itemId: string, slot: string
 		return false, "You do not own this item"
 	end
 
-	-- Unequip any existing item in this slot first (prevents duplicate slot fills)
+	-- Clear the slot silently during a switch — don't fire ItemUnequipped.
+	-- The equip handler in ItemEffectService already manages CosmeticService
+	-- cleanup/reapply. Firing ItemUnequipped here would trigger a parallel
+	-- _RestoreBirdSkinAppearance that races with _ApplyBirdSkin.
 	if state.EquippedItems[slot] then
-		self:UnequipItem(player, slot)
+		state.EquippedItems[slot] = nil
 	end
 
 	state.EquippedItems[slot] = itemId

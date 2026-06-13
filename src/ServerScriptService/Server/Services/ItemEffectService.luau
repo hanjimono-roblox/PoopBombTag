@@ -7,10 +7,13 @@
 	item's Effects table and applies them to the player's movement stats
 	(via MovementService), currency bonuses, or character properties.
 
+	COSMETIC items are forwarded to CosmeticService for safe, unified
+	slot-based application.
+
 	Watchers:
 	  * ItemPurchased → applies passive effects for OneTime upgrades, Level
 	    upgrades, and PoopMagnet
-	  * ItemEquipped   → marks cosmetic ownership (visual effects handled client-side)
+	  * ItemEquipped   → forwards to CosmeticService for visual effects
 	  * ItemUsed       → applies temporary consumable effects
 
 	This service is stateless: all passive modifiers are derived from
@@ -37,11 +40,10 @@ end
 function ItemEffectService:Start()
 	BaseService.Start(self)
 
-	-- Also listen for DataLoaded in case character spawns before
-		-- player state is available (race condition).
-		EventManager:Connect(EventNames.DataLoaded, function(player: Player)
+	-- DataLoaded: apply passive movement effects once player state is available.
+	-- CosmeticService handles cosmetic reapplication independently.
+	EventManager:Connect(EventNames.DataLoaded, function(player: Player)
     self:_ApplyMovementFromState(player)
-    self:_ApplyAllEquippedCosmetics(player)
 end)
 
 	-- Watch shop/inventory events
@@ -63,20 +65,19 @@ end)
 
 	
 
-	-- Recompute ALL passive effects + apply cosmetics whenever a
-	-- character spawns. This handles returning players, first join,
-	-- and respawns.
+	-- Recompute ALL passive movement effects whenever a character spawns.
+	-- CosmeticService handles cosmetic reapplication independently via its
+	-- own CharacterAdded listener — we only apply movement here to avoid
+	-- duplicate cosmetic applications.
 	Players.PlayerAdded:Connect(function(player: Player)
 	local function apply()
 		task.delay(0.1, function()
 			self:_ApplyMovementFromState(player)
-			self:_ApplyAllEquippedCosmetics(player)
 		end)
 	end
 
 	player.CharacterAdded:Connect(apply)
 
-	-- immediate apply if character already exists
 	if player.Character then
 		apply()
 	end
@@ -91,7 +92,6 @@ end)
 		local function apply()
 			task.delay(0.1, function()
 				self:_ApplyMovementFromState(player)
-				self:_ApplyAllEquippedCosmetics(player)
 			end)
 		end
 
@@ -435,7 +435,7 @@ function ItemEffectService:_ApplyMovementFromState(player: Player)
 end
 
 -- ---------------------------------------------------------------------------
--- Cosmetic Equip / Unequip
+-- Cosmetic Equip / Unequip (FORWARDED to CosmeticService)
 -- ---------------------------------------------------------------------------
 
 -- Called when a player equips a cosmetic via the shop UI.
@@ -451,7 +451,11 @@ function ItemEffectService:_OnItemEquipped(player: Player, itemId: string, slot:
 		return
 	end
 
-	self:_ApplyCosmeticEffect(player, character, itemDef, slot)
+	-- Forward to CosmeticService for safe, unified application
+	local cosmeticService = self.Services:Get("CosmeticService")
+	if cosmeticService then
+		cosmeticService:ApplyCosmetic(player, character, itemDef)
+	end
 end
 
 -- Called when a player unequips a cosmetic.
@@ -460,345 +464,31 @@ function ItemEffectService:_OnItemUnequipped(player: Player, slot: string)
 	if not character then
 		return
 	end
-	self:_RemoveCosmeticEffect(character, slot)
+
+	-- Forward to CosmeticService for safe removal.
+	-- BirdSkin uses UnequipBirdSkin (restores appearance + destroys instances).
+	-- All other slots use RemoveCosmetic (destroys tagged instances only).
+	local cosmeticService = self.Services:Get("CosmeticService")
+	if cosmeticService then
+		if slot == "BirdSkin" then
+			cosmeticService:UnequipBirdSkin(character)
+		else
+			cosmeticService:RemoveCosmetic(character, slot)
+		end
+	end
+
+	-- Also clear the attribute on the character
+	character:SetAttribute(`ActiveCosmetic_{slot}`, nil)
 end
 
 -- Re-applies all currently equipped cosmetics to the player's
 -- character. Called on DataLoaded, character respawn, and startup.
+-- Forwards to CosmeticService's ReapplyAllOnSpawn.
 function ItemEffectService:_ApplyAllEquippedCosmetics(player: Player)
-	local catalog = self.Services:Get("CatalogService")
-	local playerManager = self.Services:Get("PlayerManager")
-	local state = playerManager:GetState(player)
-	if not state then
-		return
+	local cosmeticService = self.Services:Get("CosmeticService")
+	if cosmeticService then
+		cosmeticService:ReapplyAllOnSpawn(player)
 	end
-
-	local character = player.Character
-	if not character then
-		return
-	end
-
-	for slot, itemId in pairs(state.EquippedItems) do
-		local itemDef = catalog:GetItem(itemId)
-		if itemDef then
-			self:_ApplyCosmeticEffect(player, character, itemDef, slot)
-		end
-	end
-end
-
--- Applies a single cosmetic effect to the character based on its Slot.
-function ItemEffectService:_ApplyCosmeticEffect(
-	player: Player,
-	character: Model,
-	itemDef: any,
-	slot: string
-)
-	local effects = itemDef.Effects
-	local logging = self.Services:Get("LoggingService")
-
-	-- Remove any existing effect in this slot first
-	self:_RemoveCosmeticEffect(character, slot)
-
-	if slot == "Trail" then
-		self:_CreateTrail(character, itemDef, effects)
-	elseif slot == "TagEffect" then
-		self:_CreateTagEffect(character, itemDef, effects)
-	elseif slot == "DeathEffect" then
-		-- Death effect is triggered on death, not applied continuously.
-		-- We store the itemId reference so the death handler can look it up.
-	elseif slot == "Hat" then
-		self:_CreateHat(character, itemDef, effects)
-	elseif slot == "Pet" then
-		self:_SpawnPet(player, character, itemDef, effects)
-	elseif slot == "Emote" then
-		-- Emotes are triggered via UI action, not continuous.
-	end
-
-	if logging then
-		logging:Info("COSMETIC", `Applied {slot} "{itemDef.Id}" to {player.Name}`)
-	end
-end
-
--- Removes the cosmetic object(s) for a given slot from the character.
-function ItemEffectService:_RemoveCosmeticEffect(character: Model, slot: string)
-	for _, d in ipairs(character:GetDescendants()) do
-		if d:GetAttribute("CosmeticSlot") == slot then
-			d:Destroy()
-		end
-	end
-end
-
--- ---------------------------------------------------------------------------
--- Trail Cosmetics (GoldenTrail, ElectricTrail)
--- ---------------------------------------------------------------------------
-
-function ItemEffectService:_CreateTrail(character: Model, itemDef: any, effects: { [string]: any })
-	local rootPart = character:FindFirstChild("HumanoidRootPart")
-	if not rootPart or not rootPart:IsA("BasePart") then
-		return
-	end
-
-	-- Attachment0: base attachment (feet/root, trails between this and attachment1)
-	local attachment0 = Instance.new("Attachment")
-	attachment0.Name = `TrailAttachment0_{itemDef.Id}`
-	attachment0:SetAttribute("CosmeticSlot", "Trail")
-	attachment0.Position = effects.TrailAttachment == "HumanoidRootPart" and Vector3.new(0, -2, 0) or Vector3.zero
-	attachment0.Parent = rootPart
-
-	-- Attachment1: secondary attachment on lower leg so the trail actually renders.
-	-- Roblox Trails require TWO attachments to draw between.
-	local leftFoot = character:FindFirstChild("LeftFoot") or character:FindFirstChild("LeftLowerLeg")
-	local rightFoot = character:FindFirstChild("RightFoot") or character:FindFirstChild("RightLowerLeg")
-	local secondaryParent = (leftFoot and leftFoot:IsA("BasePart") and leftFoot) or (rightFoot and rightFoot:IsA("BasePart") and rightFoot) or rootPart
-
-	local attachment1 = Instance.new("Attachment")
-	attachment1.Name = `TrailAttachment1_{itemDef.Id}`
-	attachment1:SetAttribute("CosmeticSlot", "Trail")
-	attachment1.Position = Vector3.zero
-	attachment1.Parent = secondaryParent
-
-	local trail = Instance.new("Trail")
-	trail.Name = `Trail_{itemDef.Id}`
-	trail:SetAttribute("CosmeticSlot", "Trail")
-	trail.Attachment0 = attachment0
-	trail.Attachment1 = attachment1
-	trail.Lifetime = effects.TrailLifetime or 0.8
-	trail.MinLength = 0.1
-	trail.Enabled = true
-	trail.Parent = rootPart
-
-	if effects.TrailColor then
-		trail.Color = ColorSequence.new(effects.TrailColor)
-	end
-
-	local width = effects.TrailWidth or 0.5
-	trail.MaxLength = width * 10
-end
-
--- ---------------------------------------------------------------------------
--- Tag Effect (RainbowTagAura) — aura around bomb holder
--- ---------------------------------------------------------------------------
-
-function ItemEffectService:_CreateTagEffect(character: Model, itemDef: any, effects: { [string]: any })
-	local rootPart = character:FindFirstChild("HumanoidRootPart")
-	if not rootPart or not rootPart:IsA("BasePart") then
-		return
-	end
-
-	local attachment = Instance.new("Attachment")
-	attachment.Name = `TagAuraAttachment_{itemDef.Id}`
-	attachment:SetAttribute("CosmeticSlot", "TagEffect")
-	attachment.Parent = rootPart
-
-	local particle = Instance.new("ParticleEmitter")
-	particle.Name = `TagAura_{itemDef.Id}`
-	particle:SetAttribute("CosmeticSlot", "TagEffect")
-	particle.Texture = "rbxassetid://0000000000"
-	particle.Rate = 20
-	particle.Lifetime = NumberRange.new(0.5, 1.0)
-	particle.SpreadAngle = Vector2.new(0, 360)
-	particle.Speed = NumberRange.new(1)
-	particle.Color = ColorSequence.new(Color3.fromRGB(255, 0, 0), Color3.fromRGB(0, 255, 0), Color3.fromRGB(0, 0, 255))
-	particle.Enabled = true
-	particle.Parent = attachment
-end
-
--- ---------------------------------------------------------------------------
--- Hat Cosmetic (CrownOfPoop)
--- ---------------------------------------------------------------------------
-
-function ItemEffectService:_CreateHat(character: Model, itemDef: any, effects: { [string]: any })
-	local head = character:FindFirstChild("Head")
-	if not head or not head:IsA("BasePart") then
-		return
-	end
-
-	local attachment = Instance.new("Attachment")
-	attachment.Name = `HatAttachment_{itemDef.Id}`
-	attachment:SetAttribute("CosmeticSlot", "Hat")
-	attachment.Position = Vector3.new(0, 0.5, 0)
-	attachment.Parent = head
-
-	-- Spawn a simple part as a placeholder hat
-	local hatPart = Instance.new("Part")
-	hatPart.Name = `Hat_{itemDef.Id}`
-	hatPart:SetAttribute("CosmeticSlot", "Hat")
-	hatPart.Size = Vector3.new(1.2, 0.6, 1.2)
-	hatPart.Shape = Enum.PartType.Cylinder
-	hatPart.BrickColor = BrickColor.new("Brown")
-	hatPart.Anchored = false
-	hatPart.CanCollide = false
-	hatPart.Massless = true
-
-	local weld = Instance.new("WeldConstraint")
-	weld.Part0 = hatPart
-	weld.Part1 = head
-	weld.Parent = hatPart
-
-	hatPart.Parent = character
-end
-
--- ---------------------------------------------------------------------------
--- Pet Cosmetic (ShadowPet)
--- ---------------------------------------------------------------------------
-local RunService = game:GetService("RunService")
-
-function ItemEffectService:_SpawnPet(
-	player: Player,
-	character: Model,
-	itemDef: any,
-	effects: { [string]: any }
-)
-	local rootPart = character:FindFirstChild("HumanoidRootPart")
-	if not rootPart or not rootPart:IsA("BasePart") then
-		return
-	end
-
-	local petScale = effects.PetScale or 1
-
-	-- =========================
-	-- MODEL SETUP
-	-- =========================
-	local petModel = Instance.new("Model")
-	petModel.Name = `Pet_{itemDef.Id}`
-	petModel:SetAttribute("CosmeticSlot", "Pet")
-	petModel.Parent = character
-
-	local core = Instance.new("Part")
-	core.Shape = Enum.PartType.Ball
-	core.Size = Vector3.new(1.2, 1.0, 1.4) * petScale
-	core.Material = Enum.Material.SmoothPlastic
-	core.Color = Color3.fromRGB(10, 10, 10)
-	core.Transparency = 0.25
-	core.Anchored = true
-	core.CanCollide = false
-	core.CanTouch = false
-	core.CanQuery = false
-	core.Parent = petModel
-
-	local aura = Instance.new("Part")
-	aura.Shape = Enum.PartType.Ball
-	aura.Size = core.Size * 1.6
-	aura.Material = Enum.Material.Neon
-	aura.Color = Color3.fromRGB(120, 40, 180)
-	aura.Transparency = 0.75
-	aura.Anchored = true
-	aura.CanCollide = false
-	aura.CanTouch = false
-	aura.CanQuery = false
-	aura.Parent = petModel
-
-	local highlight = Instance.new("Highlight")
-	highlight.Name = "PetHighlight"
-	highlight.FillColor = Color3.fromRGB(25, 0, 45)
-	highlight.OutlineColor = Color3.fromRGB(180, 80, 255)
-	highlight.FillTransparency = 0.6
-	highlight.OutlineTransparency = 0.2
-	highlight.Parent = petModel
-
-	-- =========================
-	-- STATE
-	-- =========================
-	local elapsed = 0
-	local baseCoreSize = core.Size
-
-	local followOffset = Vector3.new(-3, -1, -3)
-
-	local followSpeed = 9
-	local idleOrbitSpeed = 1.2
-
-	local lastRootPos = rootPart.Position
-	local isMoving = false
-
-	local connection
-
-	-- =========================
-	-- CLEANUP
-	-- =========================
-	local function cleanup()
-		if connection then
-			connection:Disconnect()
-			connection = nil
-		end
-
-		if petModel and petModel.Parent then
-			petModel:Destroy()
-		end
-	end
-
-	petModel.Destroying:Connect(cleanup)
-
-	-- =========================
-	-- LOOP
-	-- =========================
-	connection = RunService.Heartbeat:Connect(function(dt)
-		if not player.Parent then
-			cleanup()
-			return
-		end
-
-		if player.Character ~= character then
-			cleanup()
-			return
-		end
-
-		if not rootPart.Parent then
-			cleanup()
-			return
-		end
-
-		elapsed += dt
-
-		-- movement detection
-		local moveDelta = (rootPart.Position - lastRootPos).Magnitude
-		lastRootPos = rootPart.Position
-		isMoving = moveDelta > 0.05
-
-		-- wobble
-		local wobble = CFrame.new(
-			math.sin(elapsed * 2.2) * 0.2,
-			math.sin(elapsed * 3.0) * 0.25,
-			math.cos(elapsed * 2.6) * 0.2
-		)
-
-		-- orbit
-		local orbit = CFrame.Angles(
-			0,
-			elapsed * (isMoving and 0.5 or idleOrbitSpeed),
-			0
-		)
-
-		-- BASE POSITION
-		local baseCF = rootPart.CFrame * CFrame.new(followOffset)
-
-		-- FIXED CONDITIONAL (Lua-safe)
-		local targetCF
-		if isMoving then
-			targetCF = baseCF * wobble
-		else
-			targetCF = baseCF * orbit * wobble
-		end
-
-		-- smooth follow
-		local alpha = 1 - math.exp(-followSpeed * dt)
-
-		core.CFrame = core.CFrame:Lerp(targetCF, alpha)
-		aura.CFrame = aura.CFrame:Lerp(targetCF, alpha * 0.55)
-
-		-- pulse
-		local pulse = (math.sin(elapsed * 2.6) + 1) * 0.5
-
-		core.Transparency = 0.25 + pulse * 0.15
-		aura.Transparency = 0.72 + pulse * 0.18
-
-		core.Size = baseCoreSize * (1 + pulse * 0.035)
-		aura.Size = core.Size * (1.6 + pulse * 0.06)
-
-		if highlight.Parent then
-			highlight.FillTransparency = 0.55 + pulse * 0.25
-			highlight.OutlineTransparency = 0.15 + pulse * 0.2
-		end
-	end)
 end
 
 return ItemEffectService

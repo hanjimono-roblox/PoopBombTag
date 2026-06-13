@@ -1,0 +1,11 @@
+{
+  "className": "MeshPart",
+  "properties": {
+    "CFrame": [2.0, 88.8549, -41.2004, -1, 0, 0, 0, 1, 0, 0, 0, -1],
+    "InitialSize": [7.5367, 18.9697, 9.7292],
+    "MeshContent": "rbxassetid://14440319545",
+    "PivotOffset": [0, -0.8549, -2.2004, 1, 0, 0, 0, 1, 0, 0, 0, 1],
+    "Size": [3.7684, 9.4849, 4.8646],
+    "TextureContent": "rbxassetid://14440319557"
+  }
+}

@@ -1,6 +1,7 @@
 {
   "className": "ProximityPrompt",
   "properties": {
+    "MaxActivationDistance": 5,
     "RequiresLineOfSight": false
   }
 }

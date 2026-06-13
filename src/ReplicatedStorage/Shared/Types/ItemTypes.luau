@@ -1,10 +1,10 @@
 --!strict
 
-export type ItemCategory = "OneTime" | "Level" | "Consumable" | "Cosmetic"
+export type ItemCategory = "OneTime" | "Level" | "Consumable" | "Cosmetic" | "BirdSkin"
 
-export type ItemRarity = "Common" | "Uncommon" | "Rare" | "Epic" | "Legendary"
+export type ItemRarity = "Common" | "Uncommon" | "Rare" | "Epic" | "Legendary" | "Mythic"
 
-export type ItemSlot = "Pet" | "Trail" | "DeathEffect" | "TagEffect" | "Hat" | "Emote"
+export type ItemSlot = "Pet" | "Trail" | "DeathEffect" | "TagEffect" | "Hat" | "Emote" | "BirdSkin" | "Aura"
 
 export type ItemDefinition = {
 	Id: string,
