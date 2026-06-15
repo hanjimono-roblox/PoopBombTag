@@ -284,6 +284,11 @@ function BombManager:ClearBomb()
 		self.Services:Get("BombAttachmentService"):DetachBomb(previousHolder)
 		self.Services:Get("InteractionService"):ClearPreviousContacts(previousHolder)
 	end
+
+	-- Fire internal cleared event so ReplicationService can tell clients
+	-- to stop their countdown render loop. Without this, the bomb timer
+	-- continues counting down even after the round ends (e.g. from hazards).
+	EventManager:Fire(EventNames.BombClearedInternal)
 end
 
 function BombManager:GetBombHolder(): Player?

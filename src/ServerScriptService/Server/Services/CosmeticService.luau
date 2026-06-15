@@ -563,7 +563,9 @@ function CosmeticService:_ApplyBirdSkin(character: Model, itemDef: any)
 		end
 	end
 
-	-- Clear clothing
+	-- Always clear clothing slots on the description so ApplyDescriptionAsync
+	-- strips any existing shirt/pants. We apply feather textures afterward
+	-- via direct Shirt/Pants instances (more reliable than description-based).
 	birdDesc.Shirt = 0
 	birdDesc.Pants = 0
 	birdDesc.GraphicTShirt = 0
@@ -584,7 +586,22 @@ function CosmeticService:_ApplyBirdSkin(character: Model, itemDef: any)
 		self:ApplyCosmetic(player, newCharacter, otherItemDef)
 	end
 
-	-- 7. Add BirdSkin aura/particle effects to the new rig
+	-- 7. Create Shirt/Pants instances for feather textures (more reliable
+	--    than ApplyDescriptionAsync for custom uploaded clothing).
+	if config.ShirtAsset and config.ShirtAsset ~= 0 then
+		local shirt = self:_FindOrCreateClothing(newCharacter, "Shirt", config.ShirtAsset)
+		if shirt then
+			shirt:SetAttribute("CosmeticSlot", "BirdSkin")
+		end
+	end
+	if config.PantsAsset and config.PantsAsset ~= 0 then
+		local pants = self:_FindOrCreateClothing(newCharacter, "Pants", config.PantsAsset)
+		if pants then
+			pants:SetAttribute("CosmeticSlot", "BirdSkin")
+		end
+	end
+
+	-- 8. Add BirdSkin aura/particle effects to the new rig
 	local rootPart = newCharacter:FindFirstChild("HumanoidRootPart")
 	if not rootPart then
 		return
@@ -727,6 +744,40 @@ end
 -- ---------------------------------------------------------------------------
 -- PRIVATE HELPERS
 -- ---------------------------------------------------------------------------
+
+-- _FindOrCreateClothing(character, className, assetId)
+-- Finds existing Shirt or Pants instance on the character, or creates one.
+-- Uses ShirtTemplate / PantsTemplate for custom uploaded clothing.
+-- Returns the instance or nil.
+function CosmeticService:_FindOrCreateClothing(character: Model, className: string, assetId: number)
+	local existing = character:FindFirstChildOfClass(className)
+	if existing and existing:IsA(className) then
+		if className == "Shirt" then
+			(existing :: Shirt).ShirtTemplate = `rbxassetid://{assetId}`
+		elseif className == "Pants" then
+			(existing :: Pants).PantsTemplate = `rbxassetid://{assetId}`
+		end
+		return existing
+	end
+
+	local clothing: Instance? = nil
+	if className == "Shirt" then
+		local shirt = Instance.new("Shirt")
+		shirt.ShirtTemplate = `rbxassetid://{assetId}`
+		clothing = shirt
+	elseif className == "Pants" then
+		local pants = Instance.new("Pants")
+		pants.PantsTemplate = `rbxassetid://{assetId}`
+		clothing = pants
+	end
+
+	if clothing then
+		clothing.Name = `BirdSkin_{className}`
+		clothing.Parent = character
+	end
+
+	return clothing
+end
 
 function CosmeticService:_OnCharacterAdded(player: Player, character: Model)
 	local humanoid = character:WaitForChild("Humanoid", 5)

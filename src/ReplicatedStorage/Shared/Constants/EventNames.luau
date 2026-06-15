@@ -54,6 +54,9 @@ return table.freeze({
 	MapVoteUpdated = "MapVoteUpdated",
 	MapVoteCasted = "MapVoteCasted",
 
+	-- Bomb cleared event (for client cleanup)
+	BombClearedInternal = "BombClearedInternal",
+
 	-- Hazard system events
 	HazardDamaged = "HazardDamaged",
 	HazardEliminated = "HazardEliminated",

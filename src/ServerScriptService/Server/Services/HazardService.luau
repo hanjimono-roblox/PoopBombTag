@@ -312,13 +312,45 @@ end
 -- Earthquake Hazard
 -- ---------------------------------------------------------------------------
 
+local function _GetIntervalWithVariance(baseInterval: number, variance: number): number
+	-- Returns baseInterval +/- variance, clamped to minimum 1 second.
+	local jitter = math.random(-variance * 100, variance * 100) / 100
+	return math.max(1, baseInterval + jitter)
+end
+
 function HazardService:_StartEarthquakeLoop(config: any)
+	-- Apply StartDelay if configured.
+	local startDelay = config.StartDelay or 0
+	if startDelay > 0 then
+		task.delay(startDelay - 1, function()
+			if self._roundActive then
+				local replicationService = self.Services:Get("ReplicationService")
+				if replicationService and replicationService.BroadcastAnnouncement then
+					replicationService:BroadcastAnnouncement("⚠️ Earthquake incoming!")
+				end
+			end
+		end)
+		task.wait(startDelay)
+	end
+
 	local thread = task.spawn(function()
 		while self._roundActive do
-			task.wait(config.IntervalSeconds)
+			local waitTime = config.IntervalSeconds and _GetIntervalWithVariance(config.IntervalSeconds, config.IntervalVariance or 0) or nil
+			if waitTime then
+				task.wait(waitTime)
+			else
+				-- No interval = runs once only (after start delay)
+				break
+			end
 
 			if not self._roundActive then
 				break
+			end
+
+			-- Broadcast warning each time.
+			local replicationService = self.Services:Get("ReplicationService")
+			if replicationService and replicationService.BroadcastAnnouncement then
+				replicationService:BroadcastAnnouncement("🌍 Earthquake!")
 			end
 
 			-- Fire the earthquake started event (client handles camera shake).
@@ -379,6 +411,12 @@ function HazardService:_StartFloodLoop(config: any)
 	end
 
 	local thread = task.spawn(function()
+		-- Broadcast flood warning.
+		local replicationService = self.Services:Get("ReplicationService")
+		if replicationService and replicationService.BroadcastAnnouncement then
+			replicationService:BroadcastAnnouncement("🌊 Flood incoming! Seek high ground!")
+		end
+
 		-- Wait the start delay before flood begins.
 		task.wait(config.StartDelay)
 
@@ -457,10 +495,12 @@ function HazardService:_StartFireGeyserLoop(config: any)
 		return
 	end
 
+	-- Apply StartDelay if configured.
+	local startDelay = config.StartDelay or 0
+	task.wait(startDelay)
+
 	local thread = task.spawn(function()
 		while self._roundActive do
-			task.wait(config.IntervalSeconds)
-
 			if not self._roundActive then
 				break
 			end
@@ -495,6 +535,13 @@ function HazardService:_StartFireGeyserLoop(config: any)
 			end
 
 			task.wait(config.DurationSeconds)
+
+			-- Wait for next interval with variance.
+			local waitTime = config.IntervalSeconds and _GetIntervalWithVariance(config.IntervalSeconds, config.IntervalVariance or 0) or nil
+			if not waitTime then
+				break  -- runs once only
+			end
+			task.wait(waitTime)
 		end
 	end)
 	table.insert(self._threads, thread)
@@ -503,113 +550,206 @@ function HazardService:_StartFireGeyserLoop(config: any)
 end
 
 -- ---------------------------------------------------------------------------
+-- Bezier curve helper for smooth tornado paths
+-- ---------------------------------------------------------------------------
+
+-- Catmull-Rom spline: given 4 control points, sample position at t (0-1).
+local function _CatmullRom(p0: Vector3, p1: Vector3, p2: Vector3, p3: Vector3, t: number): Vector3
+	local t2 = t * t
+	local t3 = t2 * t
+	return 0.5 * (
+		(2 * p1) +
+		(-p0 + p2) * t +
+		(2 * p0 - 5 * p1 + 4 * p2 - p3) * t2 +
+		(-p0 + 3 * p1 - 3 * p2 + p3) * t3
+	)
+end
+
+-- Build a dense list of points along a smooth curve through the waypoints.
+-- Uses Catmull-Rom interpolation with 20 samples per segment.
+local function _BuildCurvePath(waypoints: { Vector3 }, samplesPerSegment: number?): { Vector3 }
+	local count = samplesPerSegment or 20
+	local path = {} :: { Vector3 }
+
+	if #waypoints < 2 then
+		return waypoints
+	end
+
+	-- Duplicate first and last points for boundary handling.
+	local pts = {} :: { Vector3 }
+	table.insert(pts, waypoints[1])
+	for _, p in ipairs(waypoints) do
+		table.insert(pts, p)
+	end
+	table.insert(pts, waypoints[#waypoints])
+
+	for i = 2, #pts - 2 do
+		local p0 = pts[i - 1]
+		local p1 = pts[i]
+		local p2 = pts[i + 1]
+		local p3 = pts[i + 2]
+		for j = 0, count - 1 do
+			local t = j / count
+			table.insert(path, _CatmullRom(p0, p1, p2, p3, t))
+		end
+	end
+	-- Add final point.
+	table.insert(path, waypoints[#waypoints])
+
+	return path
+end
+
+-- ---------------------------------------------------------------------------
 -- Tornado Hazard
 -- ---------------------------------------------------------------------------
 
 function HazardService:_StartTornadoLoop(config: any)
-	if #self._tornadoPathParts == 0 and #self._lavaParts == 0 then
-		self.Services:Get("LoggingService"):Warn("HAZARD", "Tornado enabled but no TornadoPath waypoints found")
-		-- Still start the tornado, but it will hover around a random position.
+	if #self._tornadoPathParts == 0 then
+		self.Services:Get("LoggingService"):Warn("HAZARD", "Tornado enabled but no TornadoPath waypoints found; using random path")
 	end
 
 	local thread = task.spawn(function()
-		-- Determine path: use waypoints if available, otherwise random points.
-		local waypoints = {}
-		if #self._tornadoPathParts > 0 then
-			for _, part in ipairs(self._tornadoPathParts) do
-				table.insert(waypoints, part.Position)
-			end
-		else
-			-- Create a few random waypoints around the map center.
-			for i = 1, 5 do
-				table.insert(waypoints, Vector3.new(
-					math.random(-60, 60),
-					5,
-					math.random(-60, 60)
-				))
-			end
-		end
-
-		local waypointIndex = 1
-		local tornadoPosition = waypoints[1]
-		local tornadoVisual = nil :: Part?
-
-		-- Create a visual tornado indicator (server-side; client renders particles).
-		tornadoVisual = Instance.new("Part")
-		tornadoVisual.Name = "TornadoCenter"
-		tornadoVisual.Anchored = true
-		tornadoVisual.CanCollide = false
-		tornadoVisual.Transparency = 1
-		tornadoVisual.Size = Vector3.new(1, 1, 1)
-		tornadoVisual.Position = tornadoPosition
-		tornadoVisual.Parent = Workspace
-		table.insert(self._spawnedInstances, tornadoVisual)
-
-		EventManager:Fire(EventNames.TornadoStarted, tornadoPosition, config.KillZoneRadius)
-
-		local elapsed = 0
-		while self._roundActive and elapsed < config.DurationSeconds do
-			-- Move toward the current waypoint.
-			local target = waypoints[waypointIndex]
-			local direction = (target - tornadoPosition).Unit
-			local distance = (target - tornadoPosition).Magnitude
-
-			if distance < 2 then
-				-- Reached waypoint; pick next.
-				waypointIndex = waypointIndex + 1
-				if waypointIndex > #waypoints then
-					if config.PathLoop then
-						waypointIndex = 1
-					else
-						break
+		-- Apply start delay before first tornado.
+		local startDelay = config.StartDelay or 0
+		if startDelay > 0 then
+			task.delay(startDelay - 1, function()
+				if self._roundActive then
+					local replicationService = self.Services:Get("ReplicationService")
+					if replicationService and replicationService.BroadcastAnnouncement then
+						replicationService:BroadcastAnnouncement("🌪️ Tornado coming! Watch out!")
 					end
 				end
+			end)
+			task.wait(startDelay)
+		end
+
+		while self._roundActive do
+			if not self._roundActive then
+				break
+			end
+
+			-- Broadcast tornado warning.
+			local replicationService = self.Services:Get("ReplicationService")
+			if replicationService and replicationService.BroadcastAnnouncement then
+				replicationService:BroadcastAnnouncement("🌪️ Tornado approaching!")
+			end
+
+			-- Determine raw waypoints from parts or random.
+			local rawWaypoints = {} :: { Vector3 }
+			if #self._tornadoPathParts > 0 then
+				for _, part in ipairs(self._tornadoPathParts) do
+					table.insert(rawWaypoints, part.Position)
+				end
 			else
-				local moveStep = math.min(config.MoveSpeed, distance)
-				tornadoPosition = tornadoPosition + direction * moveStep
+				for i = 1, 5 do
+					table.insert(rawWaypoints, Vector3.new(
+						math.random(-60, 60),
+						5,
+						math.random(-60, 60)
+					))
+				end
 			end
 
-			if tornadoVisual then
-				tornadoVisual.Position = tornadoPosition
+			-- Build smooth curve path from waypoints.
+			local curvePath = if #rawWaypoints >= 2 then _BuildCurvePath(rawWaypoints) else rawWaypoints
+
+			-- If looping, extend the path to connect back to start smoothly.
+			if config.PathLoop and #rawWaypoints >= 2 then
+				local loopPoints = {} :: { Vector3 }
+				for _, p in ipairs(rawWaypoints) do
+					table.insert(loopPoints, p)
+				end
+				table.insert(loopPoints, rawWaypoints[1])
+				curvePath = _BuildCurvePath(loopPoints)
 			end
 
-			-- Update tornado position to clients.
-			EventManager:Fire(EventNames.TornadoMoved, tornadoPosition)
+			local curveIndex = 1
+			local tornadoPosition = curvePath[1]
+			local tornadoVisual = Instance.new("Part")
+			tornadoVisual.Name = "TornadoCenter"
+			tornadoVisual.Anchored = true
+			tornadoVisual.CanCollide = false
+			tornadoVisual.Transparency = 1
+			tornadoVisual.Size = Vector3.new(1, 1, 1)
+			tornadoVisual.Position = tornadoPosition
+			tornadoVisual.Parent = Workspace
+			table.insert(self._spawnedInstances, tornadoVisual)
 
-			-- Pull and damage players in the kill zone.
-			local stateService = self.Services:Get("PlayerStateService")
-			local participants = stateService:GetActiveParticipants()
-			for _, player in ipairs(participants) do
-				local character = player.Character
-				if character then
-					local humanoidRootPart = character:FindFirstChild("HumanoidRootPart")
-					if humanoidRootPart and humanoidRootPart:IsA("BasePart") then
-						local dist = (humanoidRootPart.Position - tornadoPosition).Magnitude
-						if dist <= config.KillZoneRadius then
-							-- Pull upward.
-							humanoidRootPart:ApplyImpulse(config.PullForce)
+			-- Build visual config table to send to clients.
+			local visualConfig = {
+				BaseRadius = config.BaseRadius or 3,
+				TopRadius = config.TopRadius or 18,
+				MaxHeight = config.MaxHeight or 45,
+				ParticleRate = config.ParticleRate or 100,
+			}
+			EventManager:Fire(EventNames.TornadoStarted, tornadoPosition, config.KillZoneRadius, visualConfig)
 
-							-- Damage (once per second).
-							if not self._tornadoTargets[player] then
-								self._tornadoTargets[player] = true
-								self:_DamagePlayer(player, config.DamagePerSecond, "Tornado")
+			local elapsed = 0
+			while self._roundActive and elapsed < config.DurationSeconds do
+				local targetIndex = curveIndex
+				local target = curvePath[targetIndex]
+				if not target then
+					break
+				end
+				local direction = (target - tornadoPosition).Unit
+				local distance = (target - tornadoPosition).Magnitude
+
+				if distance < 2 then
+					curveIndex = curveIndex + 1
+					if curveIndex > #curvePath then
+						-- Reached end of curve.
+						break
+					end
+				else
+					local moveStep = math.min(config.MoveSpeed, distance)
+					tornadoPosition = tornadoPosition + direction * moveStep
+				end
+
+				if tornadoVisual then
+					tornadoVisual.Position = tornadoPosition
+				end
+
+				EventManager:Fire(EventNames.TornadoMoved, tornadoPosition)
+
+				local stateService = self.Services:Get("PlayerStateService")
+				local participants = stateService:GetActiveParticipants()
+				for _, player in ipairs(participants) do
+					local character = player.Character
+					if character then
+						local humanoidRootPart = character:FindFirstChild("HumanoidRootPart")
+						if humanoidRootPart and humanoidRootPart:IsA("BasePart") then
+							local dist = (humanoidRootPart.Position - tornadoPosition).Magnitude
+							if dist <= config.KillZoneRadius then
+								humanoidRootPart:ApplyImpulse(config.PullForce)
+								if not self._tornadoTargets[player] then
+									self._tornadoTargets[player] = true
+									self:_DamagePlayer(player, config.DamagePerSecond, "Tornado")
+								end
+							else
+								self._tornadoTargets[player] = nil
 							end
-						else
-							self._tornadoTargets[player] = nil
 						end
 					end
 				end
+
+				elapsed = elapsed + 0.5
+				task.wait(0.5)
 			end
 
-			elapsed = elapsed + 0.5
-			task.wait(0.5)
-		end
+			-- Cleanup this tornado instance.
+			if tornadoVisual and tornadoVisual.Parent then
+				tornadoVisual:Destroy()
+			end
+			self._tornadoTargets = {}
+			EventManager:Fire(EventNames.TornadoEnded)
 
-		-- Cleanup tornado.
-		if tornadoVisual and tornadoVisual.Parent then
-			tornadoVisual:Destroy()
+			-- Wait for next interval with variance before respawning.
+			local waitTime = config.IntervalSeconds and _GetIntervalWithVariance(config.IntervalSeconds, config.IntervalVariance or 0) or nil
+			if not waitTime then
+				break  -- runs once only
+			end
+			task.wait(waitTime)
 		end
-		EventManager:Fire(EventNames.TornadoEnded)
 	end)
 	table.insert(self._threads, thread)
 
@@ -622,7 +762,10 @@ end
 
 function HazardService:_StopAllLoops()
 	for _, thread in ipairs(self._threads) do
-		task.cancel(thread)
+		local success, err = pcall(task.cancel, thread)
+		if not success then
+			-- Thread may have already finished; that's fine.
+		end
 	end
 	self._threads = {}
 end

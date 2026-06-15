@@ -196,6 +196,11 @@ function ReplicationService:Start()
 	end)
 	self._connectionCount = self._connectionCount + 1
 
+	EventManager:Connect(EventNames.BombClearedInternal, function()
+		self:_FireBomb("Cleared")
+	end)
+	self._connectionCount = self._connectionCount + 1
+
 	-- ---- Round replication subscriptions ----
 
 	EventManager:Connect(EventNames.RoundStarted, function(mode: string, players: { Player })
@@ -315,7 +320,7 @@ function ReplicationService:Start()
 	self._connectionCount = self._connectionCount + 1
 
 	EventManager:Connect(EventNames.LightningFlashed, function(thunderVolume: number)
-		self:_FireHazard("LightningFlash", thunderVolume)
+		self:_FireAtmosphere("LightningFlashed", thunderVolume)
 	end)
 	self._connectionCount = self._connectionCount + 1
 
@@ -354,8 +359,8 @@ function ReplicationService:Start()
 	end)
 	self._connectionCount = self._connectionCount + 1
 
-	EventManager:Connect(EventNames.TornadoStarted, function(position: Vector3, radius: number)
-		self:_FireHazard("TornadoStarted", position, radius)
+	EventManager:Connect(EventNames.TornadoStarted, function(position: Vector3, radius: number, visualConfig: any)
+		self:_FireHazard("TornadoStarted", position, radius, visualConfig)
 	end)
 	self._connectionCount = self._connectionCount + 1
 

@@ -170,8 +170,32 @@ function AtmosphereService:_StartLightningTimer(config: any)
 end
 
 -- ---------------------------------------------------------------------------
--- Cleanup
+-- Public API (used by admin commands for testing)
 -- ---------------------------------------------------------------------------
+
+-- Applies a custom atmosphere state immediately, bypassing round lifecycle.
+-- Used by the /weather admin command for testing.
+function AtmosphereService:ApplyAtmosphereNow(atmosphere: any)
+	self._currentAtmosphere = atmosphere
+	self._roundActive = true
+	EventManager:Fire(EventNames.AtmosphereApplied, atmosphere)
+
+	-- Start lightning if thunderstorm is enabled.
+	if atmosphere.Rainstorm and atmosphere.Rainstorm.Enabled and atmosphere.Rainstorm.HasLightning then
+		self:_StartLightningTimer(atmosphere.Rainstorm)
+	end
+
+	self.Services:Get("LoggingService"):Info("ATMOSPHERE", "Atmosphere applied via command")
+end
+
+-- Clears atmosphere immediately, bypassing round lifecycle.
+function AtmosphereService:ClearAtmosphereNow()
+	self:_OnRoundEnded()
+	self._currentAtmosphere = nil
+end
+
+-- ---------------------------------------------------------------------------
+-- Cleanup
 
 function AtmosphereService:_Cleanup()
 	for _, thread in ipairs(self._threads) do

@@ -1,5 +1,12 @@
 --!strict
 
+-- ArenaTemplateConfig
+-- Each hazard type supports:
+--   Enabled: bool
+--   StartDelay: number (seconds before first occurrence; default 0)
+--   IntervalSeconds: number (seconds between repeats; omit/nil = runs once)
+--   IntervalVariance: number (random +/- seconds added to interval; default 0)
+
 local ArenaTemplateConfig = {
 	Name = "ArenaTemplate",
 	DisplayName = "Arena Template",
@@ -25,7 +32,9 @@ local ArenaTemplateConfig = {
 		-- Also pushes loose map parts (parts with Attribute("Shakeable", true)).
 		Earthquake = {
 			Enabled = false,
+			StartDelay = 10,
 			IntervalSeconds = 15,
+			IntervalVariance = 3,
 			DurationSeconds = 4,
 			ShakeMagnitude = 3,
 			KnockbackForce = Vector3.new(0, 50, 0),
@@ -45,7 +54,9 @@ local ArenaTemplateConfig = {
 		-- Requires: Part(s) with Attribute("HazardType", "FireGeyser")
 		FireGeyser = {
 			Enabled = false,
+			StartDelay = 10,
 			IntervalSeconds = 8,
+			IntervalVariance = 2,
 			DurationSeconds = 2,
 			EruptionHeight = 30,
 			DamageOnContact = 100,
@@ -57,13 +68,22 @@ local ArenaTemplateConfig = {
 		-- Requires: Part chain with Attribute("HazardType", "TornadoPath") waypoints
 		-- OR a single TornadoCenter part referencing the path.
 		Tornado = {
-			Enabled = false,
+			Enabled = true,
+			StartDelay = 15,
+			IntervalSeconds = 30,
+			IntervalVariance = 5,
 			MoveSpeed = 12,
 			PullForce = Vector3.new(0, 60, 0),
 			DamagePerSecond = 35,
 			KillZoneRadius = 8,
 			DurationSeconds = 20,
 			PathLoop = true,
+
+			-- Visual config (sent to clients for particle rendering)
+			BaseRadius = 3,
+			TopRadius = 50,
+			MaxHeight = 45,
+			ParticleRate = 100,
 		},
 	},
 
