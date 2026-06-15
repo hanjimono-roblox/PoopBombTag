@@ -28,6 +28,7 @@
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
+local ContentProvider = game:GetService("ContentProvider")
 
 local BaseService = require(script.Parent.Parent.Framework.BaseService)
 
@@ -539,7 +540,14 @@ function CosmeticService:_ApplyBirdSkin(character: Model, itemDef: any)
 		return
 	end
 
-	local config = require(skinFolder:WaitForChild("Config"))
+	-- require() caches the return value permanently. We clone the
+	-- ModuleScript to force a fresh load each time, so edits to
+	-- Config.luau (like adding ShirtAsset) take effect immediately
+	-- without restarting the play session.
+	local configModule = skinFolder:WaitForChild("Config")
+	local freshClone = configModule:Clone()
+	local config = require(freshClone)
+	freshClone:Destroy()
 
 	-- 3. Build the BirdSkin HumanoidDescription
 	local birdDesc = Instance.new("HumanoidDescription")
@@ -563,14 +571,23 @@ function CosmeticService:_ApplyBirdSkin(character: Model, itemDef: any)
 		end
 	end
 
-	-- Always clear clothing slots on the description so ApplyDescriptionAsync
-	-- strips any existing shirt/pants. We apply feather textures afterward
-	-- via direct Shirt/Pants instances (more reliable than description-based).
-	birdDesc.Shirt = 0
-	birdDesc.Pants = 0
+	-- Set clothing. HumanoidDescription.Shirt/Pants accept raw
+	-- numeric asset IDs. Set 0 to clear the slot.
+	if config.ShirtAsset and config.ShirtAsset ~= 0 then
+		birdDesc.Shirt = config.ShirtAsset
+	else
+		birdDesc.Shirt = 0
+	end
+	if config.PantsAsset and config.PantsAsset ~= 0 then
+		birdDesc.Pants = config.PantsAsset
+	else
+		birdDesc.Pants = 0
+	end
 	birdDesc.GraphicTShirt = 0
 
-	-- 4. Apply the BirdSkin via ApplyDescriptionAsync (no permanent overrides)
+	print(`[CosmeticService] BirdSkin "{birdSkinName}" — Shirt={birdDesc.Shirt}, Pants={birdDesc.Pants}`)
+
+	-- 4. Apply the BirdSkin via ApplyDescriptionAsync
 	humanoid:ApplyDescriptionAsync(birdDesc)
 
 	-- 5. Wait for rig rebuild
@@ -586,19 +603,38 @@ function CosmeticService:_ApplyBirdSkin(character: Model, itemDef: any)
 		self:ApplyCosmetic(player, newCharacter, otherItemDef)
 	end
 
-	-- 7. Create Shirt/Pants instances for feather textures (more reliable
-	--    than ApplyDescriptionAsync for custom uploaded clothing).
+	-- 7. When ShirtAsset/PantsAsset point to uploaded Decal/Texture
+	--    IDs (not Roblox Shirt/Pants catalog items), the description
+	--    approach won't render them. Fall back to direct ShirtTemplate
+	--    / PantsTemplate on created instances after a short delay to
+	--    let the Humanoid settle.
 	if config.ShirtAsset and config.ShirtAsset ~= 0 then
-		local shirt = self:_FindOrCreateClothing(newCharacter, "Shirt", config.ShirtAsset)
-		if shirt then
+		task.delay(0.3, function()
+			if not newCharacter.Parent then return end
+			for _, obj in ipairs(newCharacter:GetChildren()) do
+				if obj:IsA("Shirt") then obj:Destroy() end
+			end
+			local shirt = Instance.new("Shirt")
+			shirt.Name = "BirdSkin_Shirt"
+			shirt.ShirtTemplate = `rbxassetid://{config.ShirtAsset}`
 			shirt:SetAttribute("CosmeticSlot", "BirdSkin")
-		end
+			shirt.Parent = newCharacter
+			print("[CosmeticService] BirdSkin ShirtTemplate set:", shirt.ShirtTemplate)
+		end)
 	end
 	if config.PantsAsset and config.PantsAsset ~= 0 then
-		local pants = self:_FindOrCreateClothing(newCharacter, "Pants", config.PantsAsset)
-		if pants then
+		task.delay(0.3, function()
+			if not newCharacter.Parent then return end
+			for _, obj in ipairs(newCharacter:GetChildren()) do
+				if obj:IsA("Pants") then obj:Destroy() end
+			end
+			local pants = Instance.new("Pants")
+			pants.Name = "BirdSkin_Pants"
+			pants.PantsTemplate = `rbxassetid://{config.PantsAsset}`
 			pants:SetAttribute("CosmeticSlot", "BirdSkin")
-		end
+			pants.Parent = newCharacter
+			print("[CosmeticService] BirdSkin PantsTemplate set:", pants.PantsTemplate)
+		end)
 	end
 
 	-- 8. Add BirdSkin aura/particle effects to the new rig
